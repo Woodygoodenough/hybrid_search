@@ -1,17 +1,9 @@
 # chunked_approx_uniform_150k.py
 from datasets import load_dataset
 import csv, json, random, time
-from datetime import datetime, date
+from datetime import datetime
+from settings import N, SEED, CHUNK_FETCH, LOG_EVERY, OUT_CSV, COLUMNS, REPO_ID
 
-REPO_ID = "DragonLLM/Clean-Wikipedia-English-Articles"
-N = 150_000
-SEED = 6400
-CHUNK_FETCH = 50_000     # fetch this many, shuffle locally, then write
-LOG_EVERY = 2_000
-OUT_CSV = "wikipedia_sample_150k.csv"
-COLUMNS = ["id","title","text","categories","url","revdate","token_count","entity"]
-
-rng = random.Random(SEED)
 def norm(key,v):
     if v is None: return ""
     if key=="categories" and isinstance(v,(list,tuple)): return "; ".join(map(str,v))
@@ -23,9 +15,9 @@ def now(): return datetime.now().isoformat(timespec="seconds")
 
 def main():
     print(f"[{now()}] starting… chunked stream shuffle target={N} chunk={CHUNK_FETCH}")
+    rng = random.Random(SEED)
     ds = load_dataset(REPO_ID, split="train", streaming=True)
     it = iter(ds)
-
     n = 0
     t0 = time.time()
     with open(OUT_CSV, "w", newline="", encoding="utf-8") as f:
