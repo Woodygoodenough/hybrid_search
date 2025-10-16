@@ -1,64 +1,62 @@
-# %%
+# chunked_approx_uniform_150k.py
 from datasets import load_dataset
-import csv, random, json
+import csv, json, random, time
 from datetime import datetime, date
 
-# ---- Config ----
 REPO_ID = "DragonLLM/Clean-Wikipedia-English-Articles"
-SAMPLE_SIZE = 150_000
+N = 150_000
 SEED = 6400
+CHUNK_FETCH = 50_000     # fetch this many, shuffle locally, then write
+LOG_EVERY = 2_000
 OUT_CSV = "wikipedia_sample_150k.csv"
-
-COLUMNS = ["id", "title", "text", "categories", "url", "revdate", "token_count", "entity"]
+COLUMNS = ["id","title","text","categories","url","revdate","token_count","entity"]
 
 rng = random.Random(SEED)
+def norm(key,v):
+    if v is None: return ""
+    if key=="categories" and isinstance(v,(list,tuple)): return "; ".join(map(str,v))
+    if isinstance(v,(list,dict)): return json.dumps(v, ensure_ascii=False, separators=(",",":"))
+    if isinstance(v,str): return v
+    return str(v)
 
-def normalize_value(key, val):
-    if val is None:
-        return ""
-    if key == "categories":
-        if isinstance(val, (list, tuple)):
-            return "; ".join(map(str, val))
-        return str(val)
-    # ensure dates/datetimes serialize nicely
-    if isinstance(val, (datetime, date)):
-        return val.isoformat()
-    if isinstance(val, (dict, list)):
-        return json.dumps(val, ensure_ascii=False, separators=(",", ":"))
-    return str(val)
+def now(): return datetime.now().isoformat(timespec="seconds")
 
 def main():
-    # ---- Load (streaming) ----
-    # IMPORTANT: select the split; otherwise you get a DatasetDict and iterating yields strings
+    print(f"[{now()}] starting… chunked stream shuffle target={N} chunk={CHUNK_FETCH}")
     ds = load_dataset(REPO_ID, split="train", streaming=True)
+    it = iter(ds)
 
-    # ---- Reservoir sampling ----
-    reservoir = []
-    n_seen = 0
-
-    for row in ds:
-        # Defensive: skip anything weird
-        if not isinstance(row, dict):
-            continue
-
-        n_seen += 1
-        if len(reservoir) < SAMPLE_SIZE:
-            reservoir.append(row)
-        else:
-            j = rng.randint(1, n_seen)  # inclusive
-            if j <= SAMPLE_SIZE:
-                reservoir[j - 1] = row
-
-    # ---- Write CSV ----
+    n = 0
+    t0 = time.time()
     with open(OUT_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=COLUMNS)
-        writer.writeheader()
-        for r in reservoir:
-            out_row = {c: normalize_value(c, r.get(c, "")) for c in COLUMNS}
-            writer.writerow(out_row)
+        w = csv.DictWriter(f, fieldnames=COLUMNS)
+        w.writeheader()
 
-    print(f"[{datetime.now().isoformat(timespec='seconds')}] "
-        f"Wrote {len(reservoir)} rows to {OUT_CSV} (seen {n_seen} total)")
+        while n < N:
+            block = []
+            # fetch a block
+            for _ in range(min(CHUNK_FETCH, N - n)):
+                try:
+                    block.append(next(it))
+                except StopIteration:
+                    break
+            if not block:
+                break
+
+            rng.shuffle(block)  # local shuffle = good mixing, instant yield
+
+            # write the (shuffled) block
+            for row in block:
+                w.writerow({c: norm(c, row.get(c, "")) for c in COLUMNS})
+                n += 1
+                if n % LOG_EVERY == 0:
+                    rate = n / max(time.time()-t0, 1e-9)
+                    eta = (N - n) / max(rate, 1e-9)
+                    print(f"[{now()}] wrote {n}/{N} | {rate:.1f}/s | eta ~ {eta/60:.1f} min", flush=True)
+                if n >= N:
+                    break
+
+    print(f"[{now()}] done. wrote {n} rows → {OUT_CSV}")
 
 if __name__ == "__main__":
     main()
