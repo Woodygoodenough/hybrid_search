@@ -8,12 +8,11 @@ Assumes your own modules:
 """
 
 import sys
-import csv
 import random
 import numpy as np
 import pandas as pd
 from pathlib import Path
-
+from settings import FAISS_PATH
 from vector_index import Embedder, FaissIVFIndex, IndexConfig
 
 # --------------------------- utils ---------------------------
@@ -107,9 +106,8 @@ def build_ivfpq_from_csv(
         print(f"  +{len(ids)} → ntotal={total}")
 
     # save
-    out_path = f"{out_prefix}_nlist{nlist}_pq{pq_m}x{pq_bits}"
-    index.save(out_path)
-    print(f"Done. Saved index at: {out_path}")
+    index.save(FAISS_PATH)
+    print(f"Done. Saved index at: {FAISS_PATH}")
     print(f"ntotal={index.count()}")
 
     return index
@@ -118,9 +116,9 @@ def build_ivfpq_from_csv(
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python build_faiss_ivfpq.py <csv_path> [train_samples] [nlist]")
+        print("Usage: python create_faiss_from_csv.py <csv_path> [train_samples] [nlist]")
         sys.exit(1)
-
+    
     csv_path = sys.argv[1]
     train_samples = int(sys.argv[2]) if len(sys.argv) > 2 else 50_000
     nlist = int(sys.argv[3]) if len(sys.argv) > 3 else 4096

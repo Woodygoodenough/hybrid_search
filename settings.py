@@ -27,3 +27,4 @@ PQ_BITS      = 8                    # bits per subquantizer
 TRAIN_MAX    = 50_000               # max vectors to train on (sampled)
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TEXT_COL = "text"
+FAISS_PATH = "index.faiss"

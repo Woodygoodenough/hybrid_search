@@ -139,35 +139,42 @@ python dbManagement.py
 python create_faiss_from_csv.py wikipedia_sample_150k_with_ids.csv 50000 4096
 ```
 
-### Search System (`main.py`)
+### Interactive Search (`main.py`)
+
+Start an interactive search session:
+
+```bash
+python main.py
+```
+
+The system provides an interactive command-line interface where you can:
+- Enter search queries and get instant results
+- View titles, URLs, and categories for each result
+- Type 'quit' or 'exit' to end the session
+
+### Programmatic Search (`search.py`)
+
+For integration into other applications:
 
 ```python
-from hybrid_search import HybridSearch
+from search import SimpleSearch
 
-# Initialize search system
-search = HybridSearch(
-    db_path="meta_wiki.db",
-    index_path="faiss_index_from_csv_nlist4096_pq32x8"
-)
+# Initialize search engine
+search = SimpleSearch()
 
-# Semantic search
-results = search.search(
-    query="machine learning algorithms",
-    k=10
-)
+# Single search
+results = search.search("machine learning algorithms", k=5)
 
-# Hybrid search with metadata filters
-results = search.search(
-    query="artificial intelligence",
-    k=10,
-    filters={
-        "min_token_count": 100,
-        "categories": ["Technology", "Computer Science"]
-    }
-)
+# Multiple searches
+all_results = search.search_multiple([
+    "artificial intelligence",
+    "computer programming",
+    "data science"
+], k=3)
 
-# Get article by ID
-article = search.get_article(12345)
+# Each result contains:
+# - rank, item_id, distance, similarity
+# - title, url, categories (from database)
 ```
 
 ## Configuration (`settings.py`)
@@ -205,7 +212,8 @@ hybrid_search/
 ├── add_item_id_to_csv.py     # ID assignment utility
 ├── dbManagement.py           # SQLite database creation
 ├── create_faiss_from_csv.py  # FAISS index builder
-├── main.py                   # Main search interface
+├── main.py                   # Interactive search interface
+├── search.py                 # Core search engine
 ├── vector_index.py           # Vector operations
 ├── settings.py               # Configuration
 ├── meta_wiki.db              # Metadata database
