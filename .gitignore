@@ -3,3 +3,7 @@
 
 *.db
 *.db-*
+
+models/
+index.faiss/
+__pycache__/

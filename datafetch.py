@@ -13,8 +13,10 @@ def norm(key,v):
 
 def now(): return datetime.now().isoformat(timespec="seconds")
 
-def main():
-    print(f"[{now()}] starting… chunked stream shuffle target={N} chunk={CHUNK_FETCH}")
+def main(target_n=None):
+    if target_n is None:
+        target_n = N
+    print(f"[{now()}] starting… chunked stream shuffle target={target_n} chunk={CHUNK_FETCH}")
     rng = random.Random(SEED)
     ds = load_dataset(REPO_ID, split="train", streaming=True)
     it = iter(ds)
@@ -24,10 +26,10 @@ def main():
         w = csv.DictWriter(f, fieldnames=COLUMNS)
         w.writeheader()
 
-        while n < N:
+        while n < target_n:
             block = []
             # fetch a block
-            for _ in range(min(CHUNK_FETCH, N - n)):
+            for _ in range(min(CHUNK_FETCH, target_n - n)):
                 try:
                     block.append(next(it))
                 except StopIteration:
@@ -43,12 +45,20 @@ def main():
                 n += 1
                 if n % LOG_EVERY == 0:
                     rate = n / max(time.time()-t0, 1e-9)
-                    eta = (N - n) / max(rate, 1e-9)
-                    print(f"[{now()}] wrote {n}/{N} | {rate:.1f}/s | eta ~ {eta/60:.1f} min", flush=True)
-                if n >= N:
+                    eta = (target_n - n) / max(rate, 1e-9)
+                    print(f"[{now()}] wrote {n}/{target_n} | {rate:.1f}/s | eta ~ {eta/60:.1f} min", flush=True)
+                if n >= target_n:
                     break
 
     print(f"[{now()}] done. wrote {n} rows → {OUT_CSV}")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    target_n = None
+    if len(sys.argv) > 1:
+        try:
+            target_n = int(sys.argv[1])
+            print(f"Using target N={target_n} from command line")
+        except ValueError:
+            print(f"Invalid argument: {sys.argv[1]}. Using default N={N}")
+    main(target_n)
