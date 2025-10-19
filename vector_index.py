@@ -25,24 +25,25 @@ def _l2_normalize(mat: np.ndarray) -> np.ndarray:
 @dataclass
 class IndexConfig:
     dim: int
-    metric: str = "cosine"          # "cosine" (via L2 on unit vectors) or "l2"
-    index_type: str = "ivf_flat"    # "ivf_flat", "ivf_pq"
     nlist: int = 1024               # number of IVF clusters
-    trained: bool = False
     total: int = 0
-
     # ---- Add PQ parameters ----
-    pq_m: int = None                # how many sub-vectors
+    pq_m: Optional[int] = None                # how many sub-vectors
     pq_bits: int = 8                # bits per sub-vector (default 8)
     extras: dict = None             # extra model info
+
+    def __post_init__(self):
+        if self.pq_m is None:
+            raise ValueError("pq_m must be set.")
+        if self.dim % self.pq_m != 0:
+            raise ValueError(f"dim ({self.dim}) must be divisible by pq_m ({self.pq_m}).")
+        if self.pq_bits not in (4,5,6,7,8):
+            raise ValueError("pq_bits must be in {4,5,6,7,8} (8 is typical).")
 
     def to_json(self) -> str:
         return json.dumps({
             "dim": self.dim,
-            "metric": self.metric,
-            "index_type": self.index_type,
             "nlist": self.nlist,
-            "trained": self.trained,
             "total": self.total,
             "pq_m": self.pq_m,
             "pq_bits": self.pq_bits,
@@ -54,10 +55,7 @@ class IndexConfig:
         obj = json.loads(s)
         return IndexConfig(
             dim=int(obj["dim"]),
-            metric=obj["metric"],
-            index_type=obj["index_type"],
             nlist=int(obj["nlist"]),
-            trained=bool(obj["trained"]),
             total=int(obj["total"]),
             pq_m=obj.get("pq_m"),
             pq_bits=obj.get("pq_bits", 8),
@@ -72,10 +70,9 @@ class Embedder:
     Minimal wrapper around Sentence-Transformers.
     Choose cosine by default; we unit-normalize when metric="cosine".
     """
-    def __init__(self, model_name: str = MODEL_NAME, metric: str = "cosine"):
+    def __init__(self, model_name: str = MODEL_NAME):
         self.model = SentenceTransformer(model_name)
         self._dim = self.model.get_sentence_embedding_dimension()
-        self.metric = metric
 
     @property
     def dim(self) -> int:
@@ -87,58 +84,44 @@ class Embedder:
             batch_size=batch_size,
             show_progress_bar=False,
             convert_to_numpy=True,
-            normalize_embeddings=(self.metric == "cosine"),
+            normalize_embeddings=True,
         )
         return embs
 
     def encode_query(self, text: str) -> np.ndarray:
         v = self.encode_texts([text])
-        return v  # shape (1, dim)
-
+        return v
 
 # ---------- FAISS IVF index with explicit ID mapping ----------
 
 class FaissIVFIndex:
     """
-    Minimal IVF-Flat index with stable ID mapping and persistence.
     - Cosine similarity is implemented as L2 on unit-normalized vectors.
     - Uses IndexIDMap2 so returned IDs are your item_ids (int64).
     """
 
     def __init__(self, cfg: IndexConfig):
         self.cfg = cfg
-        # Choose metric
-        if cfg.metric == "cosine":
-            self.faiss_metric = faiss.METRIC_L2
-        elif cfg.metric == "l2":
-            self.faiss_metric = faiss.METRIC_L2
-        else:
-            raise ValueError("metric must be 'cosine' or 'l2' (minimal implementation).")
-
-        # Build the coarse quantizer (flat) and IVF-Flat container
         quantizer = faiss.IndexFlatL2(cfg.dim)
-        ivf = faiss.IndexIVFFlat(quantizer, cfg.dim, cfg.nlist, self.faiss_metric)
-
-        # Wrap in IDMap2 to store your IDs explicitly
-        self.index = faiss.IndexIDMap2(ivf)
+        base = faiss.IndexIVFPQ(quantizer, cfg.dim, cfg.nlist, cfg.pq_m, cfg.pq_bits)
+        # we want to store our own IDs, so we wrap the index in an IDMap2.
+        # ivf manages vectors internally with rowId, different from our item_ids.
+        self.index = faiss.IndexIDMap2(base)
 
     # ---- training / add ----
 
     def train(self, train_vectors: np.ndarray) -> None:
         x = _as_float32(train_vectors)
-        if self.cfg.metric == "cosine":
-            x = _l2_normalize(x)
-        ivf = faiss.downcast_index(self.index.index)  # unwrap to IVF piece
-        if not ivf.is_trained:
-            ivf.train(x)
-        self.cfg.trained = bool(ivf.is_trained)
+        x = _l2_normalize(x)   # defensively normalize here
+        ivf_pq = faiss.downcast_index(self.index.index)
+        if not self.is_trained():
+            ivf_pq.train(x)
 
     def add(self, item_ids: np.ndarray, vectors: np.ndarray) -> None:
         ids = np.asarray(item_ids, dtype="int64")
         x = _as_float32(vectors)
-        if self.cfg.metric == "cosine":
-            x = _l2_normalize(x)
-        if not faiss.downcast_index(self.index.index).is_trained:
+        x = _l2_normalize(x)   # defensively normalize here
+        if not self.is_trained():
             raise RuntimeError("Index not trained. Call train() first.")
         self.index.add_with_ids(x, ids)
         self.cfg.total = int(self.index.ntotal)
@@ -150,7 +133,6 @@ class FaissIVFIndex:
         query_vec: np.ndarray,
         k: int,
         nprobe: Optional[int] = None,
-        allow_ids: Optional[Iterable[int]] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Minimal search:
@@ -161,38 +143,17 @@ class FaissIVFIndex:
         q = _as_float32(query_vec)
         if q.ndim == 1:
             q = q.reshape(1, -1)
-        if self.cfg.metric == "cosine":
-            q = _l2_normalize(q)
+        q = _l2_normalize(q)
 
-        ivf = faiss.downcast_index(self.index.index)
-
-        # Set nprobe
-        old_nprobe = ivf.nprobe
-        if nprobe is not None:
-            ivf.nprobe = int(nprobe)
-
-        # Optional allowlist via IDSelectorBatch (good for small sets; for big masks, switch to bitsets later)
-        params = None
-        selector = None
-        if allow_ids is not None:
-            allow_ids = np.asarray(list(allow_ids), dtype="int64")
-            selector = faiss.IDSelectorBatch(allow_ids.size, faiss.swig_ptr(allow_ids))
-            params = faiss.SearchParametersIVF()
-            params.sel = selector
-
+        ivf_pq = faiss.downcast_index(self.index.index)
+        old_nprobe = ivf_pq.nprobe
+        ivf_pq.nprobe = 16 if nprobe is None else int(nprobe)
         try:
-            if params is None:
-                D, I = self.index.search(q, k)
-            else:
-                # use the IVF search with parameters (ID selector)
-                D, I = ivf.search(q, k, params)
+            distances, indices = self.index.search(q, k)
         finally:
-            # restore original nprobe
-            ivf.nprobe = old_nprobe
+            ivf_pq.nprobe = old_nprobe
+        return distances, indices
 
-        return D, I  # distances, item_ids (these are your IDs via IDMap2)
-
-    # ---- persistence ----
 
     def save(self, dirpath: str) -> None:
         os.makedirs(dirpath, exist_ok=True)
@@ -205,8 +166,10 @@ class FaissIVFIndex:
         index = faiss.read_index(os.path.join(dirpath, "vectors.index"))
         with open(os.path.join(dirpath, "index_meta.json"), "r") as f:
             cfg = IndexConfig.from_json(f.read())
-        obj = FaissIVFIndex(cfg)
-        obj.index = index  # already an IDMap2 if saved that way
+        obj = FaissIVFIndex.__new__(FaissIVFIndex)  # no __init__
+        obj.cfg = cfg
+        obj.index = index
+        obj.cfg.total = int(obj.index.ntotal)
         return obj
 
     # ---- info ----
@@ -217,71 +180,3 @@ class FaissIVFIndex:
     def is_trained(self) -> bool:
         return bool(faiss.downcast_index(self.index.index).is_trained)
 
-
-# ---------- Flat index for small datasets ----------
-
-class IndexFlat:
-    """
-    Simple flat index for small datasets (no clustering needed).
-    """
-
-    def __init__(self, cfg: IndexConfig):
-        self.cfg = cfg
-        # Choose metric
-        if cfg.metric == "cosine":
-            self.faiss_metric = faiss.METRIC_L2
-        elif cfg.metric == "l2":
-            self.faiss_metric = faiss.METRIC_L2
-        else:
-            raise ValueError("metric must be 'cosine' or 'l2'")
-
-        # Create flat index
-        if cfg.metric == "cosine":
-            # For cosine, we'll normalize manually and use L2
-            index = faiss.IndexFlatL2(cfg.dim)
-        else:
-            index = faiss.IndexFlatL2(cfg.dim)
-
-        # Wrap in IDMap2 to store IDs
-        self.index = faiss.IndexIDMap2(index)
-
-    def train(self, train_vectors: np.ndarray) -> None:
-        # Flat index doesn't need training
-        pass
-
-    def add(self, item_ids: np.ndarray, vectors: np.ndarray) -> None:
-        ids = np.asarray(item_ids, dtype="int64")
-        x = _as_float32(vectors)
-        if self.cfg.metric == "cosine":
-            x = _l2_normalize(x)
-        self.index.add_with_ids(x, ids)
-        self.cfg.total = int(self.index.ntotal)
-
-    def search(self, query_vec: np.ndarray, k: int, nprobe: Optional[int] = None, allow_ids: Optional[Iterable[int]] = None) -> Tuple[np.ndarray, np.ndarray]:
-        q = _as_float32(query_vec)
-        if q.ndim == 1:
-            q = q.reshape(1, -1)
-        if self.cfg.metric == "cosine":
-            q = _l2_normalize(q)
-
-        # For flat index, ignore nprobe and allow_ids for simplicity
-        D, I = self.index.search(q, k)
-        return D, I
-
-    def save(self, dirpath: str) -> None:
-        os.makedirs(dirpath, exist_ok=True)
-        faiss.write_index(self.index, os.path.join(dirpath, "vectors.index"))
-        with open(os.path.join(dirpath, "index_meta.json"), "w") as f:
-            f.write(self.cfg.to_json())
-
-    @staticmethod
-    def load(dirpath: str) -> "IndexFlat":
-        index = faiss.read_index(os.path.join(dirpath, "vectors.index"))
-        with open(os.path.join(dirpath, "index_meta.json"), "r") as f:
-            cfg = IndexConfig.from_json(f.read())
-        obj = IndexFlat(cfg)
-        obj.index = index
-        return obj
-
-    def count(self) -> int:
-        return int(self.index.ntotal)

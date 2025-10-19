@@ -7,3 +7,5 @@
 models/
 index.faiss/
 __pycache__/
+
+local_test/

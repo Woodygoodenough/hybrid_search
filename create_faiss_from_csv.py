@@ -1,32 +1,18 @@
 #!/usr/bin/env python3
-"""
-Minimal streaming builder: Create FAISS IVF-PQ index from a CSV with [item_id, text].
-Assumes your own modules:
-  - Embedder:  .dim (int), .encode_texts(list[str], batch_size:int) -> np.ndarray [n, dim]
-  - FaissIVFIndex: .train(np.ndarray), .add(np.ndarray[int64], np.ndarray), .save(str), .count() -> int
-  - IndexConfig: constructor supports (dim, metric="cosine", nlist=..., pq_m=32, pq_bits=8)
-"""
-
-import sys
 import random
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from settings import FAISS_PATH
+from settings import FAISS_PATH, SEED, TEXT_COL, TRAIN_MAX, NLIST, PQ_M, PQ_BITS, ITEM_COL_ID, OUT_CSV, CHUNK_SIZE, EMBED_BATCH
 from vector_index import Embedder, FaissIVFIndex, IndexConfig
 
 # --------------------------- utils ---------------------------
 
-def l2_normalize(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x, dtype=np.float32, order="C")
-    norms = np.linalg.norm(x, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    return x / norms
-
-def reservoir_sample_texts(csv_path: str, text_col: str, k: int, chunksize: int = 50_000):
+def reservoir_sample_texts(csv_path: str, text_col: str, k: int, chunksize: int = 10_000):
     """Reservoir sample k texts from a large CSV without loading it fully."""
     sample, seen = [], 0
-    for chunk in pd.read_csv(csv_path, usecols=[text_col], chunksize=chunksize):
+    for idx, chunk in enumerate(pd.read_csv(csv_path, usecols=[text_col], chunksize=chunksize)):
+        print(f"Processing chunk {idx}")
         for t in chunk[text_col].fillna(""):
             seen += 1
             if len(sample) < k:
@@ -37,27 +23,18 @@ def reservoir_sample_texts(csv_path: str, text_col: str, k: int, chunksize: int 
                     sample[j - 1] = t
     return sample
 
-def embed_texts_in_batches(embedder: Embedder, texts, batch_size: int = 64):
-    vecs = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i+batch_size]
-        v = embedder.encode_texts(batch, batch_size=batch_size)
-        vecs.append(v)
-    return np.vstack(vecs)
-
 # --------------------------- builder ---------------------------
 
 def build_ivfpq_from_csv(
     csv_path: str,
-    text_col: str = "text",
-    id_col: str = "item_id",
-    train_samples: int = 50_000,
-    nlist: int = 4096,
-    pq_m: int = 32,
-    pq_bits: int = 8,
-    add_chunksize: int = 10_000,
-    embed_batch: int = 64,
-    out_prefix: str = "faiss_index_from_csv",
+    text_col: str,
+    id_col: str,
+    train_samples: int,
+    nlist: int,
+    pq_m: int,
+    pq_bits: int,
+    add_chunksize: int,
+    embed_batch: int,
 ):
     # quick sanity
     if not Path(csv_path).exists():
@@ -71,20 +48,19 @@ def build_ivfpq_from_csv(
     # ---------- embed + normalize training ----------
     print("[2/4] Embedding training texts …")
     embedder = Embedder()
-    train_vecs = embed_texts_in_batches(embedder, train_texts, batch_size=embed_batch)
-    train_vecs = l2_normalize(train_vecs)  # cosine → normalize
+    train_vecs = embedder.encode_texts(train_texts, batch_size=embed_batch)
     dim = train_vecs.shape[1]
     print(f"Training matrix: {train_vecs.shape}")
 
     # heuristic warn (optional)
-    need = 30 * nlist
+    need = 100 * nlist
     if train_vecs.shape[0] < need:
-        print(f"Warning: train_samples={train_vecs.shape[0]} < ~30*nlist={need}. "
+        print(f"Warning: train_samples={train_vecs.shape[0]} < ~100*nlist={need}. "
               f"Index will still work, but more training data may improve quality.")
 
     # ---------- build + train index ----------
     print("[3/4] Creating & training IVF-PQ index …")
-    cfg = IndexConfig(dim=dim, metric="cosine", nlist=nlist, pq_m=pq_m, pq_bits=pq_bits)
+    cfg = IndexConfig(dim=dim, nlist=nlist, pq_m=pq_m, pq_bits=pq_bits)
     index = FaissIVFIndex(cfg)
     index.train(train_vecs)
 
@@ -95,12 +71,11 @@ def build_ivfpq_from_csv(
     print("[4/4] Adding all vectors to index …")
     total = 0
     usecols = [id_col, text_col]
-    for chunk in pd.read_csv(csv_path, usecols=usecols, chunksize=add_chunksize):
+    for idx, chunk in enumerate(pd.read_csv(csv_path, usecols=usecols, chunksize=add_chunksize)):
+        print(f"Processing chunk {idx}")
         ids = chunk[id_col].astype("int64").to_numpy(copy=False)
         texts = chunk[text_col].fillna("").tolist()
-
-        vecs = embed_texts_in_batches(embedder, texts, batch_size=embed_batch)
-        vecs = l2_normalize(vecs)
+        vecs = embedder.encode_texts(texts, batch_size=embed_batch)
         index.add(ids, vecs)
         total += len(ids)
         print(f"  +{len(ids)} → ntotal={total}")
@@ -115,21 +90,17 @@ def build_ivfpq_from_csv(
 # --------------------------- cli ---------------------------
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python create_faiss_from_csv.py <csv_path> [train_samples] [nlist]")
-        sys.exit(1)
+    random.seed(SEED)   
+    np.random.seed(SEED)
     
-    csv_path = sys.argv[1]
-    train_samples = int(sys.argv[2]) if len(sys.argv) > 2 else 50_000
-    nlist = int(sys.argv[3]) if len(sys.argv) > 3 else 4096
-
     build_ivfpq_from_csv(
-        csv_path=csv_path,
-        train_samples=train_samples,
-        nlist=nlist,
-        # tweak below only if needed:
-        pq_m=32,
-        pq_bits=8,
-        add_chunksize=10_000,
-        embed_batch=64,
+        csv_path=OUT_CSV,
+        text_col=TEXT_COL,
+        id_col=ITEM_COL_ID,
+        train_samples=TRAIN_MAX,
+        nlist=NLIST,
+        pq_m=PQ_M,
+        pq_bits=PQ_BITS,
+        add_chunksize=CHUNK_SIZE,
+        embed_batch=EMBED_BATCH,
     )
