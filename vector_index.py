@@ -89,8 +89,7 @@ class Embedder:
         return embs
 
     def encode_query(self, text: str) -> np.ndarray:
-        v = self.encode_texts([text])
-        return v
+        return self.encode_texts([text])
 
 # ---------- FAISS IVF index with explicit ID mapping ----------
 
