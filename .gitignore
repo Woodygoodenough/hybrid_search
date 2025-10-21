@@ -13,3 +13,5 @@ local_test/
 index.faiss/
 
 .DS_Store
+
+test.*

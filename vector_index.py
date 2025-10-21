@@ -4,12 +4,21 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 
 from settings import MODEL_NAME
+
+@dataclass
+class FilterIds:
+    ids: np.ndarray
+    @staticmethod
+    def from_list(ids: List[int]) -> "FilterIds":
+        return FilterIds(ids=np.asarray(ids, dtype="int64"))
+    def to_faiss(self) -> faiss.IDSelectorBatch:
+        return faiss.IDSelectorBatch(self.ids)
 
 # ---------- small utils ----------
 
@@ -127,11 +136,13 @@ class FaissIVFIndex:
 
     # ---- search ----
 
+    # search still supports multiple vectors. we keep it for now.
     def search(
         self,
         query_vec: np.ndarray,
         k: int,
         nprobe: Optional[int] = None,
+        filter_ids: Optional[FilterIds] = None    
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Minimal search:
@@ -144,13 +155,11 @@ class FaissIVFIndex:
             q = q.reshape(1, -1)
         q = _l2_normalize(q)
 
-        ivf_pq = faiss.downcast_index(self.index.index)
-        old_nprobe = ivf_pq.nprobe
-        ivf_pq.nprobe = 16 if nprobe is None else int(nprobe)
-        try:
-            distances, indices = self.index.search(q, k)
-        finally:
-            ivf_pq.nprobe = old_nprobe
+        params = faiss.SearchParametersIVF(nprobe=16 if nprobe is None else int(nprobe))
+        if filter_ids is not None:
+            params.sel = filter_ids.to_faiss()
+    
+        distances, indices = self.index.search(q, k, params)
         return distances, indices
 
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import faiss # do not remove this import, there is an apple silicon issue with faiss's importing order
 import random
 import numpy as np
 import pandas as pd

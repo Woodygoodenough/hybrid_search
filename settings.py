@@ -9,7 +9,7 @@ REPO_ID = "DragonLLM/Clean-Wikipedia-English-Articles"
 CHUNK_FETCH = 50_000     # fetch this many, shuffle locally, then write
 LOG_EVERY = 2_000
 OUT_CSV = "wikipedia_sample_150k_with_ids.csv"
-COLUMNS_CSV = ["item_id","id","title","text","categories","url","revdate","token_count","entity"]
+COLUMNS_CSV = ["item_id","id","title","text","url","revdate","token_count","entity"]
 
 # for csv loading
 CHUNK_SIZE = 10_000
@@ -17,11 +17,12 @@ CHUNK_SIZE = 10_000
 
 # for sqlite database creation
 DB_PATH = Path("meta_wiki.db")
-USECOLS = ["item_id", "id", "title", "categories", "url", "revdate", "token_count", "entity"]
+USECOLS = ["item_id", "id", "title", "url", "revdate", "token_count", "entity"]
 ITEM_COLS_CSV = ["item_id", "id", "title", "url", "revdate", "token_count", "entity"]
 ITEM_COLS_DB = ["item_id", "ext_id", "title", "url", "revdate", "token_count", "entity"]
-CATEGORY_COLS_CSV = ["item_id", "categories"]
-CATEGORY_COLS_DB = ["item_id", "category"]
+PRIMARY_KEY = "item_id"
+TABLE_NAME = "items"
+DATE_COLUMNS = ["revdate"]
 
 # IVF settings
 NLIST        = 512                 # #clusters ~ sqrt(N)
