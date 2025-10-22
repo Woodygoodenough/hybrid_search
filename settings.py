@@ -23,6 +23,10 @@ ITEM_COLS_DB = ["item_id", "ext_id", "title", "url", "revdate", "token_count", "
 PRIMARY_KEY = "item_id"
 TABLE_NAME = "items"
 DATE_COLUMNS = ["revdate"]
+# for now, we try to only implement two predicates, one for numeric and one for date. 
+# later we can try categories and lexicographic predicates
+PREDICATE_COLUMNS = ["revdate", "token_count"]
+
 
 # IVF settings
 NLIST        = 512                 # #clusters ~ sqrt(N)
@@ -32,6 +36,6 @@ TRAIN_MAX    = 60_000               # max vectors to train on (sampled)
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TEXT_COL = "text"
 ITEM_COL_ID = "item_id"
-FAISS_PATH = "index.faiss"
+FAISS_PATH = "index.faiss.new"
 # for embedding 
 EMBED_BATCH = 64

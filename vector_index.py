@@ -17,7 +17,7 @@ class FilterIds:
     @staticmethod
     def from_list(ids: List[int]) -> "FilterIds":
         return FilterIds(ids=np.asarray(ids, dtype="int64"))
-    def to_faiss(self) -> faiss.IDSelectorBatch:
+    def to_faiss(self) -> faiss.IDSelector:
         return faiss.IDSelectorBatch(self.ids)
 
 # ---------- small utils ----------
@@ -104,32 +104,30 @@ class Embedder:
 
 class FaissIVFIndex:
     """
-    - Cosine similarity is implemented as L2 on unit-normalized vectors.
+    - Cosine similarity using inner product on unit-normalized vectors.
     - Uses IndexIDMap2 so returned IDs are your item_ids (int64).
+    - Returns values in range [-1, 1] where higher = more similar.
     """
 
     def __init__(self, cfg: IndexConfig):
         self.cfg = cfg
-        quantizer = faiss.IndexFlatL2(cfg.dim)
-        base = faiss.IndexIVFPQ(quantizer, cfg.dim, cfg.nlist, cfg.pq_m, cfg.pq_bits)
-        # we want to store our own IDs, so we wrap the index in an IDMap2.
-        # ivf manages vectors internally with rowId, different from our item_ids.
-        self.index = faiss.IndexIDMap2(base)
+        # Use inner product (cosine similarity) for normalized vectors
+        quantizer = faiss.IndexFlatIP(cfg.dim)
+        self.index = faiss.IndexIVFPQ(quantizer, cfg.dim, cfg.nlist, cfg.pq_m, cfg.pq_bits, faiss.METRIC_INNER_PRODUCT)
 
     # ---- training / add ----
 
     def train(self, train_vectors: np.ndarray) -> None:
         x = _as_float32(train_vectors)
         x = _l2_normalize(x)   # defensively normalize here
-        ivf_pq = faiss.downcast_index(self.index.index)
-        if not self.is_trained():
-            ivf_pq.train(x)
+        if not self.index.is_trained:
+            self.index.train(x)
 
     def add(self, item_ids: np.ndarray, vectors: np.ndarray) -> None:
         ids = np.asarray(item_ids, dtype="int64")
         x = _as_float32(vectors)
         x = _l2_normalize(x)   # defensively normalize here
-        if not self.is_trained():
+        if not self.index.is_trained:
             raise RuntimeError("Index not trained. Call train() first.")
         self.index.add_with_ids(x, ids)
         self.cfg.total = int(self.index.ntotal)
@@ -137,31 +135,25 @@ class FaissIVFIndex:
     # ---- search ----
 
     # search still supports multiple vectors. we keep it for now.
-    def search(
-        self,
-        query_vec: np.ndarray,
-        k: int,
-        nprobe: Optional[int] = None,
-        filter_ids: Optional[FilterIds] = None    
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Minimal search:
-        - Set nprobe if provided,
-        - Optionally restrict to a small whitelist of IDs via IDSelectorBatch (minimal stand-in for bitsets),
-        - Return (distances, item_ids).
-        """
-        q = _as_float32(query_vec)
+    def search(self, query_vec: np.ndarray, k: int,
+            nprobe: Optional[int] = None,
+            filter_ids: Optional[FilterIds] = None):
+        q = _l2_normalize(_as_float32(query_vec))
         if q.ndim == 1:
             q = q.reshape(1, -1)
-        q = _l2_normalize(q)
-
-        params = faiss.SearchParametersIVF(nprobe=16 if nprobe is None else int(nprobe))
-        if filter_ids is not None:
-            params.sel = filter_ids.to_faiss()
-    
-        distances, indices = self.index.search(q, k, params)
-        return distances, indices
-
+        nprobe = 16 if nprobe is None else int(nprobe)
+        id_selector = filter_ids.to_faiss() if filter_ids else None
+        params = faiss.IVFPQSearchParameters(sel=id_selector, nprobe=nprobe)
+        distances, indices = self.index.search(q, k, params=params)
+        
+        # Convert L2 distances to cosine similarities if using L2 metric
+        if self.index.metric_type == faiss.METRIC_L2:
+            # For normalized vectors: cosine_sim = 1 - (L2_distance² / 2)
+            similarities = 1.0 - (distances ** 2) / 2.0
+            return similarities, indices
+        else:
+            # Already inner product (cosine similarity)
+            return distances, indices
 
     def save(self, dirpath: str) -> None:
         os.makedirs(dirpath, exist_ok=True)
@@ -185,6 +177,4 @@ class FaissIVFIndex:
     def count(self) -> int:
         return int(self.index.ntotal)
 
-    def is_trained(self) -> bool:
-        return bool(faiss.downcast_index(self.index.index).is_trained)
-
+    
