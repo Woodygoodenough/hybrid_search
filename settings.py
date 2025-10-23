@@ -43,3 +43,5 @@ NPROBE = 16
 # for embedding 
 EMBED_BATCH = 64
 
+# for search
+DISPLAY_COLS = ["item_id", "title","revdate", "token_count"]

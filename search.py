@@ -2,7 +2,7 @@ import faiss  # do not remove this import, there is an apple silicon issue with 
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 from vector_index import Embedder, FaissIVFIndex
-from settings import FAISS_PATH, ITEM_COLS_DB, NPROBE, NLIST
+from settings import FAISS_PATH, NPROBE, NLIST
 from dbManagement import DbManagement, DBRecord, DBRecords, Predicate
 import pandas as pd
 import time
@@ -27,14 +27,16 @@ class HSearchResults:
     results: List[HSearchResult]
     is_k: bool
 
-    def to_df(self) -> pd.DataFrame:
+    def to_df(self, show_cols: Optional[List[str]] = None) -> pd.DataFrame:
         db_records = []
         similarities = []
         for result in self.results:
             db_records.append(result.record)
             similarities.append(result.similarity)
         df = DBRecords(records=db_records).to_df()
-        df["similarity"] = similarities
+        if show_cols:
+            df = df[show_cols]
+        df["similarity"] = similarities # always show similarity
         return df.sort_values(by="similarity", ascending=False)
 
 
@@ -69,6 +71,10 @@ class Search:
         """
         db_records = self.db.predicates_search(predicates)
         predicate_count = len(db_records.records)
+
+        if predicate_count == 0:
+            print(f"No records found for the predicates: {predicates}")
+            return HSearchResults(results=[], is_k=False)
         item_ids = [record.item_id for record in db_records.records]
         
         # Use min(k, predicate_count) as search target

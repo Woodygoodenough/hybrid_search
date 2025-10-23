@@ -41,11 +41,19 @@ class DBRecord:
             entity=row[6],
         )
 
+    @classmethod
+    def get_attrs(cls) -> List[str]:
+        return ["item_id", "ext_id", "title", "url", "revdate", "token_count", "entity"]
+
 @dataclass
 class DBRecords:
     records: List[DBRecord]
     
     def to_df(self, show_cols: Optional[List[str]] = None) -> pd.DataFrame:
+        # we should consider empty records, we still return a dataframe with correct columns, but with empty rows
+        attrs = DBRecord.get_attrs()
+        if len(self.records) == 0:
+            return pd.DataFrame(columns=attrs)
         df = pd.DataFrame([record.__dict__ for record in self.records])
         if show_cols:
             df = df[show_cols]
