@@ -26,7 +26,14 @@ class AnnSearchResults:
     item_ids: np.ndarray
 
     def to_valid_dict(self) -> Dict[int, float]:
-        return {item_id: similarity for item_id, similarity in zip(self.item_ids, self.distances) if item_id != -1}
+        # Handle 0-dimensional arrays (when k=1)
+        if self.item_ids.ndim == 0:
+            item_ids = [int(self.item_ids)]
+            distances = [float(self.distances)]
+        else:
+            item_ids = self.item_ids.tolist()
+            distances = self.distances.tolist()
+        return {item_id: similarity for item_id, similarity in zip(item_ids, distances) if item_id != -1}
 
 
 # ---------- small utils ----------

@@ -13,7 +13,6 @@ from settings import (
 )
 import pandas as pd
 from typing import Iterator, List, Tuple, Dict, Optional
-from dataclasses import asdict
 from settings import PREDICATE_COLUMNS
 from datetime import datetime
 
@@ -56,14 +55,24 @@ class DBRecords:
             return pd.DataFrame(columns=attrs)
         df = pd.DataFrame([record.__dict__ for record in self.records])
         if show_cols:
-            df = df[show_cols]
+            df = df.loc[:, show_cols]
         return df
     
     def to_dict(self):
         # return a dict with item_id as key and record as value
         return {record.item_id: record for record in self.records}
+    
+    def __len__(self) -> int:
+        return len(self.records)
         
-        
+    def __iter__(self) -> Iterator[DBRecord]:
+        return iter(self.records)
+
+    # define index operator
+    def __getitem__(self, item_id: int) -> DBRecord:
+        # preserve KeyError
+        return self.to_dict()[item_id]
+
 
 
 

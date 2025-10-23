@@ -8,7 +8,7 @@ search = Search()
 print("=== Pre-filter Strategy ===")
 k = 10
 predicates = [
-    Predicate(key="token_count", value=21, operator="<"), 
+    Predicate(key="token_count", value=52, operator="<"), 
     Predicate(key="revdate", value="2025-02-01", operator=">="),
     ]
 print(f"We are searching for {k} results with predicates: {predicates}")

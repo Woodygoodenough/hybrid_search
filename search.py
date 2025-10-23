@@ -28,15 +28,10 @@ class HSearchResults:
     is_k: bool
 
     def to_df(self, show_cols: Optional[List[str]] = None) -> pd.DataFrame:
-        db_records = []
-        similarities = []
-        for result in self.results:
-            db_records.append(result.record)
-            similarities.append(result.similarity)
-        df = DBRecords(records=db_records).to_df()
-        if show_cols:
-            df = df[show_cols]
-        df["similarity"] = similarities # always show similarity
+        df_records = DBRecords([result.record for result in self.results]).to_df()
+        if show_cols is not None:
+            df = df_records.loc[:, show_cols]
+        df["similarity"] = [result.similarity for result in self.results] # always show similarity
         return df.sort_values(by="similarity", ascending=False)
 
 
@@ -79,14 +74,14 @@ class Search:
         
         # Use min(k, predicate_count) as search target
         search_k = min(k, predicate_count)
+        nprobe = NPROBE
         # debug part
         if search_k != k:
-            print(f"We do not have enough records to satisfy the {k} results, at most we can return {search_k} results")
+            print(f"We do not have enough records to satisfy the {k} results, at most we can return {search_k} results. But we still do the search to get similarities")
         else:
             print(f"We have enough records to satisfy the {k} results, we will return {search_k} results")
         query_vec = self.embedder.encode_query(query)
-        nprobe = NPROBE
-        while nprobe < NLIST:
+        while nprobe <= NLIST:
             # debug part
             print(f"Searching with # nprobe: {nprobe}")
             ann_results = self.index.search(
@@ -95,7 +90,7 @@ class Search:
                 nprobe=nprobe,
                 item_ids=item_ids,
             )
-            valid_item_ids = [item_id for item_id in ann_results.item_ids if item_id != -1]
+            valid_item_ids = [int(item_id) for item_id in (ann_results.item_ids if ann_results.item_ids.ndim > 0 else [ann_results.item_ids]) if item_id != -1]
             if len(valid_item_ids) == search_k:
                 print(f"Search results returned exactly {search_k} results, we will return them")
                 break

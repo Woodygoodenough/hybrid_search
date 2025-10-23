@@ -2,7 +2,7 @@ import unittest
 from dbManagement import DbManagement, Predicate
 
 
-class TestPredicatesSearch(unittest.TestCase):
+class TestDbSearch(unittest.TestCase):
     def setUp(self):
         self.db = DbManagement()
     
