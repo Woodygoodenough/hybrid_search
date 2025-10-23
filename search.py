@@ -2,7 +2,7 @@ import faiss  # do not remove this import, there is an apple silicon issue with 
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 from vector_index import Embedder, FaissIVFIndex
-from settings import FAISS_PATH, NPROBE, NLIST
+from settings import FAISS_PATH, NPROBE, NLIST, N
 from dbManagement import DbManagement, DBRecord, DBRecords, Predicate
 import pandas as pd
 import time
@@ -57,6 +57,15 @@ class Search:
         records = [self.db.get_from_item_id(int(index)) for index in indices]
         return records, similarities
 
+    def search(self, query: str, predicates: List[Predicate], k: int, method: str = "pre_search") -> HSearchResults:
+        if method == "pre_search":
+            return self.pre_search(query, predicates, k)
+        elif method == "post_search":
+            return self.post_search(query, predicates, k)
+        elif method == "hybrid_search":
+            pass
+        else:
+            raise ValueError(f"Invalid method: {method}")
     @time_function
     def pre_search(self, query: str, predicates: List[Predicate], k: int) -> HSearchResults:
         """
@@ -65,7 +74,7 @@ class Search:
         If len not same, increase nprobe and retry.
         """
         db_records = self.db.predicates_search(predicates)
-        predicate_count = len(db_records.records)
+        predicate_count = len(db_records)
 
         if predicate_count == 0:
             print(f"No records found for the predicates: {predicates}")
@@ -101,6 +110,52 @@ class Search:
                 nprobe = nprobe * 2
         
         top_results = self._intersect(ann_results, db_records)
+        return HSearchResults(results=top_results, is_k=len(top_results) == k)
+    
+    @time_function
+    def post_search(self, query: str, predicates: List[Predicate], k: int) -> HSearchResults:
+        """
+        Post-filter strategy: Do ANN search first, then apply predicates to filter results.
+        If not enough results after filtering, increase nprobe and retry.
+        """
+        query_vec = self.embedder.encode_query(query)
+        nprobe = NPROBE
+        
+        search_k = min(k * 3, N)  # Search for 3x more results, cap at dataset size
+        
+        while True:
+            print(f"Searching with # nprobe: {nprobe}, search_k: {search_k}")
+            ann_results = self.index.search(
+                query_vec,
+                search_k,
+                nprobe=nprobe,
+                item_ids=None,
+            )
+            
+            # Get valid item IDs from ANN results
+            valid_item_ids = [int(item_id) for item_id in (ann_results.item_ids if ann_results.item_ids.ndim > 0 else [ann_results.item_ids]) if item_id != -1]
+            
+            # Create a copy of predicates to avoid mutating the input
+            combined_predicates = predicates.copy()
+            item_id_predicate = Predicate(key="item_id", value=valid_item_ids, operator="IN")
+            combined_predicates.append(item_id_predicate)
+            
+            # Apply predicates to filter the ANN results
+            db_records = self.db.predicates_search(combined_predicates)
+            if len(db_records) >= k:
+                print(f"Post-filtering returned {len(db_records)} results (>= {k}), we will return the top {k}")
+                break
+            else:
+                if nprobe >= NLIST and search_k >= N:
+                    print(f"Warning: Reached maximum iterations, returning current results")
+                    break
+                nprobe = min(nprobe * 2, NLIST)
+                search_k = min(search_k * 3, N)  # Cap at dataset size
+            
+
+        all_results = self._intersect(ann_results, db_records)
+        all_results.sort(key=lambda x: x.similarity, reverse=True)
+        top_results = all_results if len(all_results) <k else all_results[:k]
         return HSearchResults(results=top_results, is_k=len(top_results) == k)
 
     @staticmethod

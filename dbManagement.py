@@ -79,7 +79,7 @@ class DBRecords:
 @dataclass
 class Predicate:
     key: str
-    value: str | int | float
+    value: str | int | float | List[str | int | float]
     operator: str
 
     def __post_init__(self):
@@ -89,15 +89,11 @@ class Predicate:
     def check_valid(self) -> bool:
         if self.key not in PREDICATE_COLUMNS:
             return False
-        if self.operator not in ["=", ">", "<", ">=", "<="]:
+        if self.operator not in ["=", ">", "<", ">=", "<=", "IN"]:
+            return False
+        if self.operator == "IN" and not isinstance(self.value, List):
             return False
         return True
-
-    def to_where_sql(self) -> Tuple[str, str | int | float]:
-        str_prep = f"WHERE {self.key} {self.operator} ?"
-        val_prep = self.value
-        return str_prep, val_prep
-
 
 class DbManagement:
     def __init__(self):
@@ -165,25 +161,31 @@ class DbManagement:
             DBRecord.from_row(row) for row in self.cur.execute(query).fetchall()
         ]
 
-    def predicates_search(self, predicates: List[Predicate]) -> DBRecords:
-        sql_prep = f"SELECT * FROM {TABLE_NAME} "
-        val_prep_list = []
-        
+    def predicates_search(self, predicates: List[Predicate]) -> DBRecords:        
         if predicates:
-            # Build WHERE clause with proper AND logic
-            where_clauses = []
-            for predicate in predicates:
-                str_prep, val_prep = predicate.to_where_sql()
-                # Remove "WHERE" from str_prep since we'll add it once
-                where_clause = str_prep.replace("WHERE ", "")
-                where_clauses.append(where_clause)
-                val_prep_list.append(val_prep)
-            
-            sql_prep += "WHERE " + " AND ".join(where_clauses)
-        
+            sql_prep, val_prep_list = DbManagement.predicates_sql_prep(predicates)
+        else:
+            sql_prep = f"SELECT * FROM {TABLE_NAME}"
+            val_prep_list = []
         self.cur.execute(sql_prep, tuple(val_prep_list))
         rows = self.cur.fetchall()
         return DBRecords(records=[DBRecord.from_row(row) for row in rows])
+
+    @staticmethod
+    def predicates_sql_prep(predicates: List[Predicate]) -> Tuple[str, List[str | int | float]]:
+        sql_prep = f"SELECT * FROM {TABLE_NAME} WHERE "
+        val_prep_list = []
+        for predicate in predicates:
+            if predicate.operator == "IN":
+                str_prep = f"{predicate.key} IN ({','.join(['?' for _ in predicate.value])})"
+                val_prep_list.extend(predicate.value)
+            else:
+                str_prep = f"{predicate.key} {predicate.operator} ?"
+                val_prep_list.append(predicate.value)
+            sql_prep += str_prep + " AND "
+        # Remove the trailing " AND " from the end
+        sql_prep = sql_prep[:-5]
+        return sql_prep, val_prep_list
 
     def describe_columns(self, cols: List[str]) -> Dict[str, Dict[str, float]]:
         # for each col, describe the min, max, median, 1st quartile, 3rd quartile

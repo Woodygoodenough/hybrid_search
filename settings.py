@@ -27,7 +27,7 @@ INT_COLUMNS_CSV = ["item_id", "id", "token_count"]
 INT_COLUMNS_DB = ["item_id", "ext_id", "token_count"]
 # for now, we try to only implement two predicates, one for numeric and one for date. 
 # later we can try categories and lexicographic predicates
-PREDICATE_COLUMNS = ["revdate", "token_count"]
+PREDICATE_COLUMNS = ["item_id", "revdate", "token_count"]
 
 
 # IVF settings

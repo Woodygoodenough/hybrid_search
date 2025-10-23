@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple, Dict
+from typing import List, Optional, Sequence, Dict
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 
-from settings import MODEL_NAME, NLIST
+from settings import MODEL_NAME
 
 @dataclass
 class FilterIds:
