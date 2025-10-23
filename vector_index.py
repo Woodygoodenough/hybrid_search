@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple, Dict
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 
-from settings import MODEL_NAME
+from settings import MODEL_NAME, NLIST
 
 @dataclass
 class FilterIds:
@@ -19,6 +19,15 @@ class FilterIds:
         return FilterIds(ids=np.asarray(ids, dtype="int64"))
     def to_faiss(self) -> faiss.IDSelector:
         return faiss.IDSelectorBatch(self.ids)
+
+@dataclass
+class AnnSearchResults:
+    distances: np.ndarray
+    item_ids: np.ndarray
+
+    def to_valid_dict(self) -> Dict[int, float]:
+        return {item_id: similarity for item_id, similarity in zip(self.item_ids, self.distances) if item_id != -1}
+
 
 # ---------- small utils ----------
 
@@ -114,7 +123,7 @@ class FaissIVFIndex:
         # Use inner product (cosine similarity) for normalized vectors
         quantizer = faiss.IndexFlatIP(cfg.dim)
         self.index = faiss.IndexIVFPQ(quantizer, cfg.dim, cfg.nlist, cfg.pq_m, cfg.pq_bits, faiss.METRIC_INNER_PRODUCT)
-
+    
     # ---- training / add ----
 
     def train(self, train_vectors: np.ndarray) -> None:
@@ -134,26 +143,21 @@ class FaissIVFIndex:
 
     # ---- search ----
 
-    # search still supports multiple vectors. we keep it for now.
+    # search should support multiple queries. we disable it for now.
     def search(self, query_vec: np.ndarray, k: int,
             nprobe: Optional[int] = None,
-            filter_ids: Optional[FilterIds] = None):
+            item_ids: Optional[List[int]] = None) -> AnnSearchResults:
+        
         q = _l2_normalize(_as_float32(query_vec))
         if q.ndim == 1:
             q = q.reshape(1, -1)
-        nprobe = 16 if nprobe is None else int(nprobe)
+        nprobe = self.nprobe if nprobe is None else int(nprobe)
+        filter_ids = FilterIds.from_list(item_ids) if item_ids else None
         id_selector = filter_ids.to_faiss() if filter_ids else None
         params = faiss.IVFPQSearchParameters(sel=id_selector, nprobe=nprobe)
         distances, indices = self.index.search(q, k, params=params)
-        
-        # Convert L2 distances to cosine similarities if using L2 metric
-        if self.index.metric_type == faiss.METRIC_L2:
-            # For normalized vectors: cosine_sim = 1 - (L2_distance² / 2)
-            similarities = 1.0 - (distances ** 2) / 2.0
-            return similarities, indices
-        else:
-            # Already inner product (cosine similarity)
-            return distances, indices
+        return AnnSearchResults(distances=distances.squeeze(), item_ids=indices.squeeze())
+
 
     def save(self, dirpath: str) -> None:
         os.makedirs(dirpath, exist_ok=True)
@@ -169,6 +173,7 @@ class FaissIVFIndex:
         obj = FaissIVFIndex.__new__(FaissIVFIndex)  # no __init__
         obj.cfg = cfg
         obj.index = index
+        obj.nprobe = 16  # Initialize nprobe
         obj.cfg.total = int(obj.index.ntotal)
         return obj
 

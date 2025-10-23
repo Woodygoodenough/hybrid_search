@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass
 import sqlite3
 from settings import (
@@ -8,15 +9,18 @@ from settings import (
     PRIMARY_KEY,
     TABLE_NAME,
     DATE_COLUMNS,
+    INT_COLUMNS_CSV,
 )
 import pandas as pd
-from typing import Iterator, List, Tuple, Dict
+from typing import Iterator, List, Tuple, Dict, Optional
+from dataclasses import asdict
 from settings import PREDICATE_COLUMNS
 from datetime import datetime
 
 
+
 @dataclass
-class ArticleRecord:
+class DBRecord:
     item_id: int
     ext_id: int
     title: str
@@ -26,7 +30,7 @@ class ArticleRecord:
     entity: str
 
     @classmethod
-    def from_row(cls, row: Tuple[int, int, str, str, str, int, str]) -> "ArticleRecord":
+    def from_row(cls, row: Tuple[int, int, str, str, str, int, str]) -> "DBRecord":
         return cls(
             item_id=row[0],
             ext_id=row[1],
@@ -37,11 +41,28 @@ class ArticleRecord:
             entity=row[6],
         )
 
+@dataclass
+class DBRecords:
+    records: List[DBRecord]
+    
+    def to_df(self, show_cols: Optional[List[str]] = None) -> pd.DataFrame:
+        df = pd.DataFrame([record.__dict__ for record in self.records])
+        if show_cols:
+            df = df[show_cols]
+        return df
+    
+    def to_dict(self):
+        # return a dict with item_id as key and record as value
+        return {record.item_id: record for record in self.records}
+        
+        
+
+
 
 @dataclass
 class Predicate:
     key: str
-    value: str
+    value: str | int | float
     operator: str
 
     def __post_init__(self):
@@ -55,7 +76,7 @@ class Predicate:
             return False
         return True
 
-    def to_where_sql(self) -> Tuple[str, str]:
+    def to_where_sql(self) -> Tuple[str, str | int | float]:
         str_prep = f"WHERE {self.key} {self.operator} ?"
         val_prep = self.value
         return str_prep, val_prep
@@ -80,7 +101,10 @@ class DbManagement:
         self.cur.execute("PRAGMA journal_mode = WAL;")
         sql_prep = f"CREATE TABLE {TABLE_NAME} ("
         for col in ITEM_COLS_DB:
-            sql_prep += f"{col} TEXT, "
+            if col in INT_COLUMNS_CSV:
+                sql_prep += f"{col} INTEGER, "
+            else:
+                sql_prep += f"{col} TEXT, "
         sql_prep += f"PRIMARY KEY ({PRIMARY_KEY}))"
         self.cur.execute(sql_prep)
         self.conn.commit()
@@ -90,7 +114,9 @@ class DbManagement:
         rev = pd.to_datetime(df["revdate"], errors="coerce")
         for date_col in DATE_COLUMNS:
             df[date_col] = rev.dt.strftime("%Y-%m-%d %H:%M:%S")
-
+        
+        for int_col in INT_COLUMNS_CSV:
+            df[int_col] = df[int_col].astype(int)
         # Prepare data for database insertion
         items_df = df[ITEM_COLS_CSV].copy()
         items_df.columns = ITEM_COLS_DB
@@ -110,28 +136,37 @@ class DbManagement:
         self.cur.execute(f"SELECT COUNT(*) FROM {TABLE_NAME};")
         print(f"Loaded {self.cur.fetchone()[0]} items into the database")
 
-    def get_from_item_id(self, item_id: int) -> ArticleRecord:
+    def get_from_item_id(self, item_id: int) -> DBRecord:
         self.cur.execute(f"SELECT * FROM {TABLE_NAME} WHERE item_id = ?;", (item_id,))
         row = self.cur.fetchone()
         if row is None:
             raise ValueError(f"No record found for item_id: {item_id}")
-        return ArticleRecord.from_row(row)
+        return DBRecord.from_row(row)
 
-    def query_db(self, query: str) -> List[ArticleRecord]:
+    def query_db(self, query: str) -> List[DBRecord]:
         return [
-            ArticleRecord.from_row(row) for row in self.cur.execute(query).fetchall()
+            DBRecord.from_row(row) for row in self.cur.execute(query).fetchall()
         ]
 
-    def predicates_search(self, predicates: List[Predicate]) -> List[ArticleRecord]:
+    def predicates_search(self, predicates: List[Predicate]) -> DBRecords:
         sql_prep = f"SELECT * FROM {TABLE_NAME} "
-        val_prep = []
-        for predicate in predicates:
-            str_prep, val_prep = predicate.to_where_sql()
-            sql_prep += str_prep
-            val_prep.append(val_prep)
-        self.cur.execute(sql_prep, tuple(val_prep))
+        val_prep_list = []
+        
+        if predicates:
+            # Build WHERE clause with proper AND logic
+            where_clauses = []
+            for predicate in predicates:
+                str_prep, val_prep = predicate.to_where_sql()
+                # Remove "WHERE" from str_prep since we'll add it once
+                where_clause = str_prep.replace("WHERE ", "")
+                where_clauses.append(where_clause)
+                val_prep_list.append(val_prep)
+            
+            sql_prep += "WHERE " + " AND ".join(where_clauses)
+        
+        self.cur.execute(sql_prep, tuple(val_prep_list))
         rows = self.cur.fetchall()
-        return [ArticleRecord.from_row(row) for row in rows]
+        return DBRecords(records=[DBRecord.from_row(row) for row in rows])
 
     def describe_columns(self, cols: List[str]) -> Dict[str, Dict[str, float]]:
         # for each col, describe the min, max, median, 1st quartile, 3rd quartile

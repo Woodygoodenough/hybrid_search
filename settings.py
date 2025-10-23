@@ -23,6 +23,8 @@ ITEM_COLS_DB = ["item_id", "ext_id", "title", "url", "revdate", "token_count", "
 PRIMARY_KEY = "item_id"
 TABLE_NAME = "items"
 DATE_COLUMNS = ["revdate"]
+INT_COLUMNS_CSV = ["item_id", "id", "token_count"]
+INT_COLUMNS_DB = ["item_id", "ext_id", "token_count"]
 # for now, we try to only implement two predicates, one for numeric and one for date. 
 # later we can try categories and lexicographic predicates
 PREDICATE_COLUMNS = ["revdate", "token_count"]
@@ -37,5 +39,7 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 TEXT_COL = "text"
 ITEM_COL_ID = "item_id"
 FAISS_PATH = "index.faiss.new"
+NPROBE = 16
 # for embedding 
 EMBED_BATCH = 64
+
