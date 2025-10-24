@@ -34,6 +34,11 @@ class AnnSearchResults:
             item_ids = self.item_ids.tolist()
             distances = self.distances.tolist()
         return {item_id: similarity for item_id, similarity in zip(item_ids, distances) if item_id != -1}
+    
+    def __len__(self) -> int:
+        if self.item_ids.ndim == 0:
+            return 1
+        return len(self.item_ids)
 
 
 # ---------- small utils ----------

@@ -31,15 +31,18 @@ class TestHybridSearchStrategies(unittest.TestCase):
         
         # Test post-filter strategy
         post_results = self.search.post_search(query, predicates, k)
+
+        # Test hybrid strategy
+        hybrid_results = self.search.hybrid_search(query, predicates, k)
         
         # Both strategies should return the same number of results
         self.assertEqual(len(pre_results.results), expected_count)
         self.assertEqual(len(post_results.results), expected_count)
-        
+        self.assertEqual(len(hybrid_results.results), expected_count)
         # Both strategies should have the same is_k flag
         self.assertEqual(pre_results.is_k, expected_is_k)
         self.assertEqual(post_results.is_k, expected_is_k)
-        
+        self.assertEqual(hybrid_results.is_k, expected_is_k)
         # Only check for exact matches when is_k is false (not enough results found)
         # In this case, both strategies should return all available survivors
         if not expected_is_k and expected_count > 0:
@@ -47,7 +50,7 @@ class TestHybridSearchStrategies(unittest.TestCase):
             post_item_ids = [result.record.item_id for result in post_results.results]
             self.assertEqual(pre_item_ids, post_item_ids, "Pre-filter and post-filter should return identical item_ids when is_k is false")
         
-        return pre_results, post_results
+        return pre_results, post_results, hybrid_results
     
     def test_exact_k_match(self):
         """Test case where predicates return exactly k results"""

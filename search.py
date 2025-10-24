@@ -28,9 +28,9 @@ class HSearchResults:
     is_k: bool
 
     def to_df(self, show_cols: Optional[List[str]] = None) -> pd.DataFrame:
-        df_records = DBRecords([result.record for result in self.results]).to_df()
+        df = DBRecords([result.record for result in self.results]).to_df()
         if show_cols is not None:
-            df = df_records.loc[:, show_cols]
+            df = df.loc[:, show_cols]
         df["similarity"] = [result.similarity for result in self.results] # always show similarity
         return df.sort_values(by="similarity", ascending=False)
 
@@ -41,21 +41,6 @@ class Search:
         self.embedder = Embedder()
         self.db = DbManagement()
 
-    def simple_search(
-        self, query: str, k: int, item_ids: Optional[List[int]] = None
-    ) -> Tuple[List[DBRecord], List[float]]:
-        query_vec = self.embedder.encode_query(query)
-        similarities, indices = self.index.search(
-            query_vec,
-            k,
-            item_ids=item_ids,
-        )
-        similarities, indices = similarities.squeeze(), indices.squeeze()
-        # notice search always returns 2d arrays, so we need to squeeze them to 1d arrays for single query search
-        # sqlite expects int, not numpy int64
-        # explore further optimizations if needed
-        records = [self.db.get_from_item_id(int(index)) for index in indices]
-        return records, similarities
 
     def search(self, query: str, predicates: List[Predicate], k: int, method: str = "pre_search") -> HSearchResults:
         if method == "pre_search":
@@ -77,22 +62,14 @@ class Search:
         predicate_count = len(db_records)
 
         if predicate_count == 0:
-            print(f"No records found for the predicates: {predicates}")
             return HSearchResults(results=[], is_k=False)
         item_ids = [record.item_id for record in db_records.records]
         
         # Use min(k, predicate_count) as search target
         search_k = min(k, predicate_count)
         nprobe = NPROBE
-        # debug part
-        if search_k != k:
-            print(f"We do not have enough records to satisfy the {k} results, at most we can return {search_k} results. But we still do the search to get similarities")
-        else:
-            print(f"We have enough records to satisfy the {k} results, we will return {search_k} results")
         query_vec = self.embedder.encode_query(query)
         while nprobe <= NLIST:
-            # debug part
-            print(f"Searching with # nprobe: {nprobe}")
             ann_results = self.index.search(
                 query_vec,
                 search_k,
@@ -101,12 +78,10 @@ class Search:
             )
             valid_item_ids = [int(item_id) for item_id in (ann_results.item_ids if ann_results.item_ids.ndim > 0 else [ann_results.item_ids]) if item_id != -1]
             if len(valid_item_ids) == search_k:
-                print(f"Search results returned exactly {search_k} results, we will return them")
                 break
             elif len(valid_item_ids) > search_k:
                 raise ValueError(f"Search results returned more than {search_k} results, check implementation")
             else:
-                print(f"Search results returned less than {search_k} results, we will increase nprobe to {nprobe * 2}")
                 nprobe = nprobe * 2
         
         top_results = self._intersect(ann_results, db_records)
@@ -124,7 +99,6 @@ class Search:
         search_k = min(k * 3, N)  # Search for 3x more results, cap at dataset size
         
         while True:
-            print(f"Searching with # nprobe: {nprobe}, search_k: {search_k}")
             ann_results = self.index.search(
                 query_vec,
                 search_k,
@@ -143,11 +117,9 @@ class Search:
             # Apply predicates to filter the ANN results
             db_records = self.db.predicates_search(combined_predicates)
             if len(db_records) >= k:
-                print(f"Post-filtering returned {len(db_records)} results (>= {k}), we will return the top {k}")
                 break
             else:
                 if nprobe >= NLIST and search_k >= N:
-                    print(f"Warning: Reached maximum iterations, returning current results")
                     break
                 nprobe = min(nprobe * 2, NLIST)
                 search_k = min(search_k * 3, N)  # Cap at dataset size
@@ -158,20 +130,63 @@ class Search:
         top_results = all_results if len(all_results) <k else all_results[:k]
         return HSearchResults(results=top_results, is_k=len(top_results) == k)
 
+    @time_function
+    def hybrid_search(self, query: str, predicates: List[Predicate], k: int) -> HSearchResults:
+        db_records = self.db.predicates_search(predicates)
+        predicate_count = len(db_records)
+
+        if predicate_count == 0:
+            return HSearchResults(results=[], is_k=False)
+        item_ids = [record.item_id for record in db_records.records]
+        
+        query_vec = self.embedder.encode_query(query)
+
+        if predicate_count < k:
+            print(f"We do not have enough records to satisfy the {k} results, at most we can return {predicate_count} results. But we still do the search to get similarities")
+            # in this case, ann is going to be pointless, we do brute force search by specifying nprobe to NLIST
+            ann_results = self.index.search(
+                query_vec,
+                predicate_count,
+                nprobe=NLIST,
+                item_ids=item_ids,
+            )
+            # notice here we do not need to filter out invalid item_ids: we are searching the entire dataset, and len(item_ids) == predicate_count
+            results_count = len(ann_results)
+        else:
+            nprobe = self._find_optimal_nprobe(predicate_count, k, 0)
+            while nprobe <= NLIST:
+                print(f"Searching with # nprobe: {nprobe}")
+                ann_results = self.index.search(
+                    query_vec,
+                    k,
+                    nprobe=nprobe,
+                    item_ids=item_ids,
+                )
+                valid_item_ids = [int(item_id) for item_id in (ann_results.item_ids if ann_results.item_ids.ndim > 0 else [ann_results.item_ids]) if item_id != -1]
+                results_count = len(valid_item_ids)
+                if results_count == k:
+                    break
+                elif results_count < k:
+                    nprobe = self._find_optimal_nprobe(predicate_count, k - results_count, nprobe)
+                    print(f"Search results returned {results_count} results, we will increase nprobe to {nprobe} to search for the remaining {k - results_count} results")
+
+                else:
+                    raise ValueError(f"Search results returned more than {k} results, check implementation")
+        return HSearchResults(results=self._intersect(ann_results, db_records), is_k=results_count == k)
+            
     @staticmethod
     def _intersect(ann_results: AnnSearchResults, db_records: DBRecords) -> List[HSearchResult]:
         db_records_dict = db_records.to_dict()
         ann_results_dict = ann_results.to_valid_dict()
         return [HSearchResult(record=db_records_dict[item_id], similarity=similarity) for item_id, similarity in ann_results_dict.items() if item_id in db_records_dict]
         
-
-
-def main():
-    print("simple test")
-    search = Search()
-    results = search.simple_search("machine learning algorithms", k=1)
-    print(results)
-
-
-if __name__ == "__main__":
-    main()
+    @staticmethod
+    def _find_optimal_nprobe(predicate_count: int, k_remaining: int, old_nprobe: int = 0) -> int:
+        """
+        Find the optimal nprobe for the query and predicates.
+        """
+        # each cluster is expected to have predicate_count / NLIST survivors
+        # the expected number of clusters to search is k / (predicate_count / NLIST)
+        expected_nprobe = int(k_remaining / (predicate_count / NLIST)) + old_nprobe
+        # Use 3x multiplier for safety to ensure we get enough results
+        return max(3, min(3 * expected_nprobe, NLIST))
