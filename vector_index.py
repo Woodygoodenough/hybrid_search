@@ -9,7 +9,7 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 
-from settings import MODEL_NAME
+from settings import MODEL_NAME, NPROBE
 
 @dataclass
 class FilterIds:
@@ -22,22 +22,118 @@ class FilterIds:
 
 @dataclass
 class AnnSearchResults:
+    """
+    Container for Approximate Nearest Neighbor search results.
+
+    This class handles the results from FAISS vector similarity search, including
+    proper handling of empty results and dimension management.
+
+    Attributes:
+        distances: np.ndarray of shape (n,) containing similarity distances (lower is better)
+        item_ids: np.ndarray of shape (n,) containing item IDs from the database
+
+    Dimension Behavior:
+        - When FAISS finds results: distances.shape = (k,), item_ids.shape = (k,)
+        - When FAISS finds 1 result: distances.shape = (), item_ids.shape = () [0-dimensional]
+        - When no results found: distances.shape = (0,), item_ids.shape = (0,) [empty 1-dimensional]
+
+    Length Behavior:
+        - len(result) returns the number of valid (non -1) results
+        - Empty results (all -1) have length 0
+        - 0-dimensional arrays (single result) have length 1
+        - 1-dimensional arrays have length equal to their size
+    """
     distances: np.ndarray
     item_ids: np.ndarray
 
-    def to_valid_dict(self) -> Dict[int, float]:
-        # Handle 0-dimensional arrays (when k=1)
+    def __post_init__(self):
+        """
+        Post-initialization processing of search results.
+
+        Handles dimension normalization and filtering of invalid results:
+        1. Reshapes 0-dimensional arrays to 1-dimensional for consistency
+        2. Filters out results with item_id = -1 (FAISS convention for "no result")
+        3. Maintains parallel arrays between distances and item_ids
+        """
+        # Handle 0-dimensional arrays (single result from FAISS)
+        if self.distances.ndim == 0:
+            self.distances = self.distances.reshape(1)
+        if self.item_ids.ndim == 0:
+            self.item_ids = self.item_ids.reshape(1)
+
+        # Create mask for valid (non -1) item ids before filtering
+        # FAISS uses -1 to indicate "no result found at this position"
+        valid_mask = self.item_ids != -1
+
+        # Keep only the valid results (where item_id != -1)
+        self.item_ids = self.item_ids[valid_mask]
+        self.distances = self.distances[valid_mask]
+
+    @classmethod
+    def empty(cls) -> "AnnSearchResults":
+        """
+        Create an empty AnnSearchResults instance representing no search results.
+
+        This is the preferred way to create empty results instead of using
+        np.zeros(0) which can cause dimension confusion.
+
+        Returns:
+            AnnSearchResults: Empty instance with no results
+        """
+        return cls(
+            distances=np.array([], dtype=np.float32),
+            item_ids=np.array([], dtype=np.int64)
+        )
+
+    def is_empty(self) -> bool:
+        """
+        Check if this result set contains any valid results.
+
+        Returns:
+            bool: True if no valid results found, False otherwise
+        """
+        return len(self.item_ids) == 0
+
+    def to_dict(self) -> Dict[int, float]:
+        """
+        Convert results to a dictionary mapping item_id to similarity score.
+
+        This method handles all dimension cases correctly:
+        - Empty results: returns empty dict {}
+        - Single result (0-dim): returns {item_id: similarity}
+        - Multiple results (1-dim): returns {item_id1: sim1, item_id2: sim2, ...}
+
+        Returns:
+            Dict[int, float]: Mapping of item_id to similarity score
+        """
+        # All -1 values should already be filtered out in __post_init__
+
+        if self.is_empty():
+            return {}
+
+        # Handle 0-dimensional arrays (when k=1, FAISS returns shape ())
         if self.item_ids.ndim == 0:
             item_ids = [int(self.item_ids)]
             distances = [float(self.distances)]
         else:
+            # Handle 1-dimensional arrays (normal case)
             item_ids = self.item_ids.tolist()
             distances = self.distances.tolist()
-        return {item_id: similarity for item_id, similarity in zip(item_ids, distances) if item_id != -1}
+
+        return {item_id: similarity for item_id, similarity in zip(item_ids, distances)}
     
     def __len__(self) -> int:
-        if self.item_ids.ndim == 0:
-            return 1
+        """
+        Return the number of valid results found.
+
+        This method handles different numpy array dimensions correctly:
+        - Empty arrays (shape (0,)): return 0
+        - 0-dimensional arrays (shape ()): return 1 (single result)
+        - 1-dimensional arrays (shape (n,)): return n
+
+        Returns:
+            int: Number of valid results (item_ids != -1)
+        """
         return len(self.item_ids)
 
 
@@ -135,7 +231,7 @@ class FaissIVFIndex:
         # Use inner product (cosine similarity) for normalized vectors
         quantizer = faiss.IndexFlatIP(cfg.dim)
         self.index = faiss.IndexIVFPQ(quantizer, cfg.dim, cfg.nlist, cfg.pq_m, cfg.pq_bits, faiss.METRIC_INNER_PRODUCT)
-    
+        self.nprobe = NPROBE
     # ---- training / add ----
 
     def train(self, train_vectors: np.ndarray) -> None:
@@ -163,9 +259,10 @@ class FaissIVFIndex:
         q = _l2_normalize(_as_float32(query_vec))
         if q.ndim == 1:
             q = q.reshape(1, -1)
-        nprobe = self.nprobe if nprobe is None else int(nprobe)
         filter_ids = FilterIds.from_list(item_ids) if item_ids else None
         id_selector = filter_ids.to_faiss() if filter_ids else None
+        if nprobe is None:
+            nprobe = self.nprobe
         params = faiss.IVFPQSearchParameters(sel=id_selector, nprobe=nprobe)
         distances, indices = self.index.search(q, k, params=params)
         return AnnSearchResults(distances=distances.squeeze(), item_ids=indices.squeeze())

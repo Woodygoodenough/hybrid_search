@@ -40,6 +40,7 @@ TEXT_COL = "text"
 ITEM_COL_ID = "item_id"
 FAISS_PATH = "index.faiss.new"
 NPROBE = 16
+N_PER_CLUSTER = 30_000
 # for embedding 
 EMBED_BATCH = 64
 

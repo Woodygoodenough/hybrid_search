@@ -12,29 +12,8 @@ from settings import (
     INT_COLUMNS_CSV,
 )
 import pandas as pd
-import numpy as np
-from typing import Iterator, List, Tuple, Dict, Optional
-from settings import PREDICATE_COLUMNS
-from datetime import datetime
-
-@dataclass
-class Predicate:
-    key: str
-    value: str | int | float | List[str | int | float]
-    operator: str
-
-    def __post_init__(self):
-        if not self.check_valid():
-            raise ValueError(f"Invalid predicate: {self}")
-
-    def check_valid(self) -> bool:
-        if self.key not in PREDICATE_COLUMNS:
-            return False
-        if self.operator not in ["=", ">", "<", ">=", "<=", "IN"]:
-            return False
-        if self.operator == "IN" and not isinstance(self.value, List):
-            return False
-        return True
+from typing import Iterator, List, Tuple, Optional
+from shared_dataclasses import Predicate
 
 @dataclass
 class DBRecord:
@@ -98,6 +77,22 @@ class DbManagement:
         self.cur = self.conn.cursor()
         self.histogram_2d = None  # Will store 2D histogram for date vs token_count
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        """Close database connection."""
+        try:
+            if hasattr(self, 'cur') and self.cur:
+                self.cur.close()
+            if hasattr(self, 'conn') and self.conn:
+                self.conn.close()
+        except Exception:
+            pass
+
     def create_db(self):
         # if a DB exists, close current connection and remove the file
         try:
@@ -120,7 +115,7 @@ class DbManagement:
         self.cur.execute(sql_prep)
         self.conn.commit()
 
-    def load_df_to_db(self, df: pd.DataFrame):
+    def _load_df_to_db(self, df: pd.DataFrame):
         # Process dates more efficiently
         rev = pd.to_datetime(df["revdate"], errors="coerce")
         for date_col in DATE_COLUMNS:
@@ -142,7 +137,7 @@ class DbManagement:
     ) -> None:
         for df in reader:
             df = df.copy()
-            self.load_df_to_db(df)
+            self._load_df_to_db(df)
         self._create_indexes()
         self.cur.execute(f"SELECT COUNT(*) FROM {TABLE_NAME};")
         print(f"Loaded {self.cur.fetchone()[0]} items into the database")
@@ -153,11 +148,6 @@ class DbManagement:
         if row is None:
             raise ValueError(f"No record found for item_id: {item_id}")
         return DBRecord.from_row(row)
-
-    def query_db(self, query: str) -> List[DBRecord]:
-        return [
-            DBRecord.from_row(row) for row in self.cur.execute(query).fetchall()
-        ]
 
     def predicates_search(self, predicates: List[Predicate]) -> DBRecords:        
         if predicates:
@@ -170,13 +160,14 @@ class DbManagement:
         return DBRecords(records=[DBRecord.from_row(row) for row in rows])
 
     @staticmethod
-    def predicates_sql_prep(predicates: List[Predicate]) -> Tuple[str, List[str | int | float]]:
+    def predicates_sql_prep(predicates: List[Predicate]) -> Tuple[str, List[str | int | float | List[str | int | float]]]:
         sql_prep = f"SELECT * FROM {TABLE_NAME} WHERE "
         val_prep_list = []
         for predicate in predicates:
             if predicate.operator == "IN":
-                str_prep = f"{predicate.key} IN ({','.join(['?' for _ in predicate.value])})"
-                val_prep_list.extend(predicate.value)
+                normalized_list = predicate.value
+                str_prep = f"{predicate.key} IN ({','.join(['?' for _ in normalized_list])})"
+                val_prep_list.extend(normalized_list)  # type: ignore[arg-type]
             else:
                 str_prep = f"{predicate.key} {predicate.operator} ?"
                 val_prep_list.append(predicate.value)
@@ -185,85 +176,6 @@ class DbManagement:
         sql_prep = sql_prep[:-5]
         return sql_prep, val_prep_list
 
-    def describe_columns(self, cols: List[str]) -> Dict[str, Dict[str, float]]:
-        # for each col, describe the min, max, median, 1st quartile, 3rd quartile
-        # SQLite does not provide MEDIAN/QUANTILE; compute from ordered values.
-        desc_dict = {
-            col: {"min": None, "max": None, "median": None, "q1": None, "q3": None}
-            for col in cols
-        }
-        for col in cols:
-            if col in DATE_COLUMNS:
-                # Use Unix seconds for ordering and quantiles
-                self.cur.execute(
-                    f"SELECT strftime('%s', {col}) AS ts "
-                    f"FROM {TABLE_NAME} "
-                    f"WHERE {col} IS NOT NULL "
-                    f"ORDER BY ts ASC;"
-                )
-                ts_values = [int(r[0]) for r in self.cur.fetchall()]
-                if not ts_values:
-                    continue
-                desc_dict[col]["min"] = datetime.fromtimestamp(ts_values[0]).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                desc_dict[col]["max"] = datetime.fromtimestamp(ts_values[-1]).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                # quantiles via interpolation on numeric timestamps
-                median_ts = int(self._percentile(ts_values, 0.5))
-                q1_ts = int(self._percentile(ts_values, 0.25))
-                q3_ts = int(self._percentile(ts_values, 0.75))
-                desc_dict[col]["median"] = datetime.fromtimestamp(median_ts).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                desc_dict[col]["q1"] = datetime.fromtimestamp(q1_ts).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                desc_dict[col]["q3"] = datetime.fromtimestamp(q3_ts).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            else:
-                # numeric-like columns
-                self.cur.execute(
-                    f"SELECT CAST({col} AS REAL) AS v "
-                    f"FROM {TABLE_NAME} "
-                    f"WHERE {col} IS NOT NULL "
-                    f"ORDER BY v ASC;"
-                )
-                values = [row[0] for row in self.cur.fetchall() if row[0] is not None]
-                if not values:
-                    continue
-                desc_dict[col]["min"] = float(values[0])
-                desc_dict[col]["max"] = float(values[-1])
-                desc_dict[col]["median"] = float(self._percentile(values, 0.5))
-                desc_dict[col]["q1"] = float(self._percentile(values, 0.25))
-                desc_dict[col]["q3"] = float(self._percentile(values, 0.75))
-        return desc_dict
-
-    def _percentile(self, sorted_values: List[float], p: float) -> float:
-        """Compute the p-quantile using linear interpolation on pre-sorted values."""
-        n = len(sorted_values)
-        if n == 0:
-            return float("nan")
-        if p <= 0:
-            return float(sorted_values[0])
-        if p >= 1:
-            return float(sorted_values[-1])
-        rank = p * (n - 1)
-        low_index = int(rank)
-        high_index = low_index + 1
-        fraction = rank - low_index
-        if high_index >= n:
-            return float(sorted_values[low_index])
-        low_val = sorted_values[low_index]
-        high_val = sorted_values[high_index]
-        return float(low_val + (high_val - low_val) * fraction)
-
-    def desc_to_df(self, desc_dict: Dict[str, Dict[str, float]]) -> pd.DataFrame:
-        df = pd.DataFrame(desc_dict)
-        return df
-
     def _create_indexes(self):
         for col in ITEM_COLS_DB:
             self.cur.execute(
@@ -271,82 +183,6 @@ class DbManagement:
             )
         self.conn.commit()
         self.cur.execute("PRAGMA synchronous = NORMAL;")
-
-    def build_2d_histogram(self):
-        """Build 2D histogram for date vs token_count to estimate predicate survival rates"""
-        # Get all data
-        self.cur.execute(f"SELECT revdate, token_count FROM {TABLE_NAME}")
-        data = self.cur.fetchall()
-        
-        if not data:
-            return
-        
-        # Convert to numpy arrays
-        dates = np.array([datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").timestamp() for row in data])
-        token_counts = np.array([row[1] for row in data])
-        
-        # Create 2D histogram (20x20 bins)
-        hist, x_edges, y_edges = np.histogram2d(dates, token_counts, bins=20)
-        
-        self.histogram_2d = {
-            'hist': hist,
-            'x_edges': x_edges,  # date bins
-            'y_edges': y_edges,  # token_count bins
-            'total_points': len(data)
-        }
-        return self.histogram_2d
-    
-    def estimate_survival_rate(self, predicates: List[Predicate]) -> float:
-        """Estimate what proportion of data survives given predicates"""
-        if not self.histogram_2d:
-            self.build_2d_histogram()
-        
-        if not predicates:
-            return 1.0
-        
-        # Count points that would survive all predicates
-        surviving_points = 0
-        total_points = self.histogram_2d['total_points']
-        
-        for i in range(len(self.histogram_2d['x_edges']) - 1):
-            for j in range(len(self.histogram_2d['y_edges']) - 1):
-                # Get bin center values
-                date_center = datetime.fromtimestamp(
-                    (self.histogram_2d['x_edges'][i] + self.histogram_2d['x_edges'][i+1]) / 2
-                ).strftime("%Y-%m-%d %H:%M:%S")
-                token_center = (self.histogram_2d['y_edges'][j] + self.histogram_2d['y_edges'][j+1]) / 2
-                
-                # Check if this bin survives all predicates
-                if self._bin_survives_predicates(date_center, token_center, predicates):
-                    surviving_points += self.histogram_2d['hist'][i, j]
-        
-        return surviving_points / total_points if total_points > 0 else 0.0
-    
-    def _bin_survives_predicates(self, date_str: str, token_count: float, predicates: List[Predicate]) -> bool:
-        """Check if a bin center survives all predicates"""
-        for pred in predicates:
-            if pred.key == "revdate":
-                if not self._date_predicate_match(date_str, pred):
-                    return False
-            elif pred.key == "token_count":
-                if not self._numeric_predicate_match(token_count, pred):
-                    return False
-        return True
-
-    def get_optimal_nprobe(self, predicates: List[Predicate], base_nprobe: int = 16) -> int:
-        """Get optimal nprobe based on estimated survival rate"""
-        survival_rate = self.estimate_survival_rate(predicates)
-        
-        # Adjust nprobe inversely with survival rate
-        # Lower survival rate = need more clusters searched
-        if survival_rate < 0.01:  # < 1% survival
-            return min(base_nprobe * 4, 512)  # Max 512 clusters
-        elif survival_rate < 0.1:  # < 10% survival
-            return min(base_nprobe * 2, 512)
-        elif survival_rate < 0.5:  # < 50% survival
-            return min(int(base_nprobe * 1.5), 512)
-        else:
-            return base_nprobe
 
 
 if __name__ == "__main__":

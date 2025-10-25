@@ -1,11 +1,19 @@
 # %%
+from shared_dataclasses import Predicate
 from search import Search
-from dbManagement import Predicate
-from settings import DISPLAY_COLS
-# %%
-search = Search()
+
+query = "artificial intelligence"
 predicates = [Predicate(key="token_count", value=100, operator="<")]
-results = search.hybrid_search("artificial intelligence", predicates, 3)
+k = 3
+
+
+search = Search()
 # %%
-results.to_df(show_cols=DISPLAY_COLS)
+with search as search:
+    results = search.search(query, predicates, k, method="post_search")
+results
+
+
+# %%
+results.to_df()
 # %%
