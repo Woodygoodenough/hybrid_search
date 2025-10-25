@@ -2,12 +2,68 @@
 
 A complete hybrid search system that combines semantic vector search with metadata filtering. Built with FAISS for efficient vector similarity search and SQLite for metadata storage.
 
-## Architecture Overview
+## 🚀 Quick Start
+
+### Installation
+
+#### Option 1: Automated Installation
+```bash
+# Ignore this, we can do this in the final distribution
+./install.sh
+```
+
+#### Option 2: Using Conda
+```bash
+# Create environment from YAML file
+conda env create -f environment.yml
+
+# Activate environment
+conda activate hybrid_search
+```
+
+#### Option 3: Using Pip
+```bash
+# Install dependencies
+pip install -r requirements.txt
+```
+
+#### Option 4: Manual Installation
+```bash
+# Core dependencies
+pip install faiss-cpu sentence-transformers numpy pandas datasets
+
+```
+
+### Complete Workflow Setup
+
+#### Option 1: Automated Setup
+```bash
+# Run the complete workflow automatically (not sure if it works. Recommend using the manual setup)
+./setup_workflow.sh
+```
+
+#### Option 2: Manual Setup
+```bash
+# 1. Fetch Wikipedia data (150k articles)
+python datafetch.py
+
+# 2. Add sequential IDs to CSV
+python add_item_id_to_csv.py wikipedia_sample_150k.csv
+
+# 3. Create metadata database
+python dbManagement.py
+
+# 4. Build FAISS vector index
+python create_faiss_from_csv.py wikipedia_sample_150k_with_ids.csv
+
+```
+
+## 🏗️ Architecture Overview
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Wikipedia     │ => │   CSV with IDs   │ => │   SQLite DB     │
-│   Dataset       │    │   & Metadata     │    │   (Metadata)    │
+│   Dataset       │    │   & Metadata     │    │   (Metadata)   │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
                               │                          │
                               ▼                          ▼
@@ -17,19 +73,11 @@ A complete hybrid search system that combines semantic vector search with metada
                        └──────────────────┘    └─────────────────┘
 ```
 
-## Features
-
-- **Semantic Search**: Uses sentence transformers to encode text into vectors
-- **Vector Indexing**: FAISS IVF-PQ index for fast similarity search
-- **Metadata Filtering**: SQLite database for structured metadata queries
-- **Hybrid Queries**: Combine semantic similarity with metadata filters
-- **Scalable**: Processes large datasets with streaming and chunked operations
-
-## Pipeline Components
+## 📋 Pipeline Components
 
 ### 1. Data Collection (`datafetch.py`)
 
-Fetches Wikipedia articles from HuggingFace datasets and creates the initial CSV.
+Fetches Wikipedia articles from HuggingFace datasets using streaming and chunked processing.
 
 ```bash
 # Fetch 150k articles (default)
@@ -39,11 +87,11 @@ python datafetch.py
 python datafetch.py 50000
 ```
 
-**Settings:**
-- `REPO_ID`: HuggingFace dataset identifier
-- `N`: Target number of articles (default: 150,000)
-- `CHUNK_FETCH`: Articles per chunk for shuffling
-- `OUT_CSV`: Output CSV filename
+**Features:**
+- Streaming data processing for memory efficiency
+- Local shuffling for better data distribution
+- Progress tracking and ETA estimation
+- Configurable chunk sizes
 
 **Output:** `wikipedia_sample_150k_with_ids.csv` with columns:
 - `item_id`: Sequential ID (added later)
@@ -69,8 +117,6 @@ python add_item_id_to_csv.py wikipedia_sample_150k.csv [output_file]
 2. Inserts `item_id` column with sequential integers (0, 1, 2, ...)
 3. Creates new CSV with `_with_ids` suffix
 
-**Output:** `wikipedia_sample_150k_with_ids.csv`
-
 ### 3. Metadata Database (`dbManagement.py`)
 
 Creates SQLite database with normalized metadata for efficient filtering.
@@ -82,19 +128,12 @@ python dbManagement.py
 **Database Schema:**
 - **`items` table**: Core article metadata
   - `item_id`, `ext_id`, `title`, `url`, `revdate`, `token_count`, `entity`
-- **`item_categories` table**: Normalized categories (many-to-many)
-  - `item_id`, `category`
 
-**Process:**
-1. Creates fresh database with proper schema
-2. Loads CSV data in chunks for memory efficiency
-3. Processes categories into separate table
-4. Creates indexes for query performance
-
-**Settings:**
-- `USECOLS`: Columns to load from CSV
-- `DBCOLS`: Column mapping for database
-- `CHUNK_SIZE`: Batch size for processing
+**Features:**
+- Chunked processing for large datasets
+- Automatic date normalization
+- Indexed columns for fast queries
+- WAL mode for better concurrency
 
 ### 4. Vector Index (`create_faiss_from_csv.py`)
 
@@ -105,79 +144,111 @@ python create_faiss_from_csv.py wikipedia_sample_150k_with_ids.csv [train_sample
 ```
 
 **Process:**
-1. **Training Phase**: Samples texts for index training
+1. **Training Phase**: Samples texts for index training using reservoir sampling
 2. **Embedding**: Encodes texts using sentence transformers
 3. **Normalization**: L2 normalization for cosine similarity
 4. **Index Training**: Creates IVF-PQ index with training vectors
 5. **Vector Addition**: Adds all vectors to index in chunks
 
 **Parameters:**
-- `train_samples`: Number of texts for training (default: 50,000)
-- `nlist`: Number of IVF clusters (default: 4,096)
+- `train_samples`: Number of texts for training (default: 60,000)
+- `nlist`: Number of IVF clusters (default: 512)
 - `pq_m`: Product quantization sub-vectors (default: 32)
 - `pq_bits`: Bits per sub-vector (default: 8)
 
-**Output:**
-- FAISS index files (`.index` and `.json` metadata)
-- Index statistics and performance metrics
+## 🔍 Current Implementation Status
 
-## Usage Examples
+### ✅ Implemented Features
 
-### Basic Setup
+**Adaptive Search Strategies:**
+- **Pre-search filtering**: Filters database first, then searches vectors
+- **Post-search filtering**: Searches vectors first, then filters results
+- **Adaptive nprobe**: Dynamically adjusts search parameters based on expected survivors
+- **Histogram-based estimation**: Uses 2D histograms to estimate predicate selectivity
 
-```bash
-# 1. Fetch data
-python datafetch.py 150000
+**Smart Parameter Optimization:**
+- `estimate_survivors()`: Estimates how many records match given predicates
+- Adaptive `nprobe` calculation based on selectivity
+- Exponential search expansion for post-search strategy
+- Iterative refinement until k results are found
 
-# 2. Add IDs
-python add_item_id_to_csv.py wikipedia_sample_150k.csv
+### 🚧 Current Stage: Adaptive Pre/Post Search
 
-# 3. Create metadata database
-python dbManagement.py
+**What's Working:**
+- Both pre-search and post-search strategies are implemented
+- Adaptive parameter tuning based on `estimate_survivors`
+- Proper threshold handling for different selectivity scenarios
+- Comprehensive test suite validating both strategies
 
-# 4. Create vector index
-python create_faiss_from_csv.py wikipedia_sample_150k_with_ids.csv 50000 4096
-```
+**What's Missing:**
+- **Baseline approaches**: Coarse, non-adaptive versions of both strategies
+- **Strategy merging**: Unified approach combining pre/post benefits
+- **Performance benchmarking**: Comparison between adaptive and baseline methods
+
+### 🎯 Next Steps
+
+1. **Implement Baseline Approaches:**
+   - Coarse pre-search: Fixed nprobe, no adaptive tuning
+   - Coarse post-search: Fixed search parameters, no survivor estimation
+   - These will serve as performance baselines
+
+2. **Strategy Selection:**
+   - Implement threshold-based strategy selection
+   - Use `estimate_survivors` to choose optimal approach
+   - Merge strategies for hybrid benefits
+
+3. **Performance Optimization:**
+   - Benchmark adaptive vs baseline approaches
+   - Fine-tune threshold parameters
+   - Optimize histogram resolution
+
+## 💻 Usage Examples
 
 ### Interactive Search (`main.py`)
+Not implemented yet
 
-Start an interactive search session:
-
-```bash
-python main.py
-```
-
-The system provides an interactive command-line interface where you can:
-- Enter search queries and get instant results
-- View titles, URLs, and categories for each result
-- Type 'quit' or 'exit' to end the session
 
 ### Programmatic Search (`search.py`)
 
 For integration into other applications:
 
 ```python
-from search import SimpleSearch
+from search import Search
+from shared_dataclasses import Predicate
 
 # Initialize search engine
-search = SimpleSearch()
-
-# Single search
-results = search.search("machine learning algorithms", k=5)
-
-# Multiple searches
-all_results = search.search_multiple([
-    "artificial intelligence",
-    "computer programming",
-    "data science"
-], k=3)
-
-# Each result contains:
-# - rank, item_id, distance, similarity
-# - title, url, categories (from database)
+with Search() as search:
+    # Simple search
+    results = search.search("machine learning algorithms", [], k=5)
+    
+    # Search with metadata filters
+    predicates = [
+        Predicate(key="token_count", value=500, operator="<"),
+        Predicate(key="revdate", value="2025-01-01", operator=">=")
+    ]
+    results = search.search("AI research", predicates, k=5)
+    
+    # Choose search strategy
+    pre_results = search.search("deep learning", predicates, k=5, method="pre_search")
+    post_results = search.search("deep learning", predicates, k=5, method="post_search")
 ```
 
-## Configuration (`settings.py`)
+### Testing (`test_hybrid_strategies.py`)
+
+Run comprehensive tests for both search strategies:
+
+```bash
+python test_hybrid_strategies.py
+```
+
+Tests cover:
+- Exact k matches and boundary conditions
+- Edge cases (k=1, empty results, very large k)
+- Single and multiple predicate combinations
+- Different query terms
+- Performance comparison between strategies
+
+## ⚙️ Configuration (`settings.py`)
 
 ```python
 # Data settings
@@ -187,24 +258,27 @@ OUT_CSV = "wikipedia_sample_150k_with_ids.csv"
 
 # Database settings
 DB_PATH = Path("meta_wiki.db")
-CHUNK_SIZE = 5_000            # Processing batch size
+CHUNK_SIZE = 10_000           # Processing batch size
 
 # Vector index settings
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-NLIST = 4096                  # IVF clusters
+NLIST = 512                   # IVF clusters
 PQ_M = 32                     # PQ sub-vectors
 PQ_BITS = 8                   # Bits per sub-vector
-TRAIN_MAX = 50_000           # Training samples
+TRAIN_MAX = 60_000           # Training samples
+NPROBE = 16                   # Default nprobe
+N_PER_CLUSTER = 30_000       # Estimated items per cluster
 ```
 
-## Performance Characteristics
+## 📊 Performance Characteristics
 
-- **Vector Search**: Sub-second similarity queries on millions of vectors
+- **Vector Search**: Sub-second similarity queries on 150k vectors
 - **Metadata Filtering**: Fast SQL queries with proper indexing
 - **Memory Usage**: Streaming processing for large datasets
 - **Storage**: Compressed FAISS index + lightweight SQLite metadata
+- **Adaptive Tuning**: Dynamic parameter optimization based on query selectivity
 
-## File Structure
+## 📁 File Structure
 
 ```
 hybrid_search/
@@ -212,30 +286,54 @@ hybrid_search/
 ├── add_item_id_to_csv.py     # ID assignment utility
 ├── dbManagement.py           # SQLite database creation
 ├── create_faiss_from_csv.py  # FAISS index builder
-├── main.py                   # Interactive search interface
 ├── search.py                 # Core search engine
 ├── vector_index.py           # Vector operations
+├── histo2d.py                # 2D histogram for selectivity estimation
+├── shared_dataclasses.py     # Common data structures
 ├── settings.py               # Configuration
+├── requirements.txt          # Pip dependencies
+├── environment.yml           # Conda environment
+├── install.sh                # Automated installation script
+├── setup_workflow.sh         # Automated workflow setup script
+├── test_hybrid_strategies.py # Strategy comparison tests
+├── test_vector_index.py     # Vector index tests
+├── test_db_search.py        # Database search tests
 ├── meta_wiki.db              # Metadata database
 ├── wikipedia_sample_150k_with_ids.csv  # Processed data
-└── index.faiss/              # FAISS index files
+└── index.faiss.new/          # FAISS index files
     ├── index_meta.json
     └── vectors.index
 ```
 
-## Requirements
-
-- Python 3.8+
-- FAISS
-- Sentence Transformers
-- Pandas
-- SQLite3
-- HuggingFace Datasets
-
-## Advanced Features
+## 🔬 Advanced Features
 
 - **Reservoir Sampling**: Memory-efficient sampling for index training
 - **Chunked Processing**: Handles datasets larger than available RAM
 - **Index Persistence**: Save/load trained indexes for reuse
 - **Metadata Normalization**: Handles complex data types and missing values
-- **Query Optimization**: Combines vector and metadata queries efficiently
+- **Adaptive Query Optimization**: Combines vector and metadata queries efficiently
+- **2D Histogram Estimation**: Sophisticated selectivity estimation for query planning
+- **Iterative Search Refinement**: Dynamic parameter tuning during search execution
+
+## 🧪 Testing
+
+The project includes comprehensive test suites:
+
+```bash
+# Test hybrid search strategies
+python test_hybrid_strategies.py
+
+# Test vector index functionality
+python test_vector_index.py
+
+# Test database search operations
+python test_db_search.py
+```
+
+## 🤝 Contributing
+
+This project implements adaptive hybrid search strategies with sophisticated parameter optimization. The current focus is on:
+
+1. Implementing baseline (non-adaptive) approaches for comparison
+2. Developing strategy selection mechanisms
+3. Performance benchmarking and optimization

@@ -1,0 +1,14 @@
+# Core ML and Vector Search Dependencies
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+numpy>=1.21.0
+
+# Data Processing
+pandas>=1.3.0
+datasets>=2.0.0
+
+# Database
+sqlite3  # Built-in with Python
+
+# Development and Testing
+unittest  # Built-in with Python
