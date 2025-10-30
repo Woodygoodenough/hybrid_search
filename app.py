@@ -9,8 +9,6 @@ from backend import SearchService
 
 def initialize_session_state():
     """Initialize session state variables."""
-    if 'search_service' not in st.session_state:
-        st.session_state.search_service = SearchService()
     if 'predicates' not in st.session_state:
         st.session_state.predicates = []
 
@@ -216,13 +214,16 @@ def main():
             else:
                 with st.spinner("Searching..."):
                     try:
-                        # Perform search
-                        results_df = st.session_state.search_service.perform_search(
-                            query=query,
-                            k=k,
-                            predicates=st.session_state.predicates,
-                            method=method
-                        )
+                        # Create a new SearchService for each search to avoid threading issues
+                        # SQLite connections are not thread-safe across different threads
+                        with SearchService() as search_service:
+                            # Perform search
+                            results_df = search_service.perform_search(
+                                query=query,
+                                k=k,
+                                predicates=st.session_state.predicates,
+                                method=method
+                            )
                         
                         # Store results in session state
                         st.session_state.last_results = results_df
