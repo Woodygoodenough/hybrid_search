@@ -57,8 +57,26 @@ class Search:
             raise ValueError(f"Invalid method: {method}")
 
     def pre_search(self, embedding_query: np.ndarray, predicates: List[Predicate], k: int) -> HSearchResults:
-        # we need to implement coarse pre-search here
-        return self.adaptive_pre_search(embedding_query, predicates, k)
+        pre_db_records = self.db.predicates_search(predicates)
+        pre_predicate_count = len(pre_db_records)
+        if pre_predicate_count == 0:
+            return HSearchResults(results=[], is_k=False)
+        pre_item_ids = [record.item_id for record in pre_db_records.records]
+
+        nprobe = 16
+        ann_results = AnnSearchResults.empty()
+        iteration = 0
+        k = min(pre_predicate_count, k)
+        while len(ann_results) < k:
+            print(f"------------START OF ITERATION {iteration + 1} OF COARSE PRE-SEARCH-------------")
+            print(f"len(ann_results) = {len(ann_results)}, k = {k}")
+            print(f"nprobe = {nprobe}")
+            ann_results = self.index.search(embedding_query, k, nprobe=nprobe, item_ids=pre_item_ids)
+            nprobe = min(NLIST, nprobe * 3)
+            iteration += 1
+        pre_top_results = self._intersect(ann_results, pre_db_records)
+        return HSearchResults(results=pre_top_results[:k], is_k=len(pre_top_results) >= k)
+
     
     def pos_search(self, embedding_query: np.ndarray, predicates: List[Predicate], k: int, est_survivors: int) -> HSearchResults:
         # we need to implement coarse post-search here
@@ -74,8 +92,9 @@ class Search:
         nprobe = 0
         ann_results = AnnSearchResults.empty()
         iteration = 0
+        k = min(pre_predicate_count, k)
         while len(ann_results) < k:
-            print(f"------------START OF ITERATION {iteration + 1} OF PRE-SEARCH-------------")
+            print(f"------------START OF ITERATION {iteration + 1} OF ADAPTIVE PRE-SEARCH-------------")
             print(f"len(ann_results) = {len(ann_results)}, k = {k}")
             print(f"nprobe = {nprobe}")
             nprobe = self._opt_pre_nprobe(pre_predicate_count, k - len(ann_results), nprobe)
