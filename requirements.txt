@@ -11,7 +11,8 @@ datasets>=2.0.0
 streamlit>=1.28.0
 
 # Database
-sqlite3  # Built-in with Python
+#sqlite3  # Built-in with Python
 
 # Development and Testing
-unittest  # Built-in with Python
+#unittest  # Built-in with Python
+pytest>=7.0.0
