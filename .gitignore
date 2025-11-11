@@ -15,3 +15,5 @@ index.faiss/
 .DS_Store
 
 test.*
+
+*.ipynb
