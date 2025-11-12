@@ -1,19 +1,23 @@
 # %%
-from shared_dataclasses import Predicate
+from timer import Timer
 from search import Search
+from shared_dataclasses import Predicate
 
-query = "artificial intelligence"
-predicates = [Predicate(key="token_count", value=100, operator="<")]
-k = 3
+timer = Timer()
+search = Search(timer)
 
+query_embedding = search.embedder.encode_query("test query")
+predicates = [Predicate(key="item_id", value=[1, 2, 3], operator="IN")]
+k = 10
 
-search = Search()
+results = search.base_pre_search(query_embedding, predicates, k)
 # %%
-with search as search:
-    results = search.search(query, predicates, k, method="post_search")
-results
-
+timer.raw_times
 
 # %%
-results.to_df()
+timer.runs
+# %%
+timer.save_run()
+# %%
+timer.runs
 # %%

@@ -1,7 +1,7 @@
 """
-Unit tests for both pre-filter and post-filter search functionality.
+Unit tests for all four search methods: pre_search, adaptive_pre_search, pos_search, and adaptive_pos_search.
 
-These tests verify that both strategies return the same number of results and is_k flags.
+These tests verify that all four methods return the same number of results and is_k flags.
 For cases where is_k is false (not enough results found), exact result matching is verified.
 For normal cases, only result count matching is checked.
 
@@ -10,10 +10,11 @@ Test Coverage:
 - Edge cases (k=1, empty results, very large k)
 - Single and multiple predicate combinations
 - Different query terms
-- Performance comparison between strategies
+- Performance comparison between methods
 
-Both strategies should return identical results when is_k is false, and same counts otherwise.
+All four methods should return identical results when is_k is false, and same counts otherwise.
 """
+
 import unittest
 from search import Search
 from dbManagement import Predicate
@@ -27,49 +28,94 @@ class TestHybridSearchStrategies(unittest.TestCase):
     def tearDown(self):
         """Clean up after each test method."""
         self.search.close()
-    
-    def _test_both_strategies(self, query: str, predicates: list, k: int, min_expected_count: int, expected_is_k: bool):
-        """Helper method to test both pre-filter and post-filter strategies."""
+
+    def _test_four_methods(
+        self,
+        query: str,
+        predicates: list,
+        k: int,
+        min_expected_count: int,
+        expected_is_k: bool,
+    ):
+        """Helper method to test all four search methods."""
         # Encode query once for all methods
         embedding_query = self.search.embedder.encode_query(query)
         est_survivors = self.search.histo.estimate_survivors(predicates)
 
-        # Test pre-filter strategy
-        pre_results = self.search.pre_search(embedding_query, predicates, k)
+        # Test all four methods
+        pre_results = self.search.base_pre_search(embedding_query, predicates, k)
+        adaptive_pre_results = self.search.adap_pre_search(
+            embedding_query, predicates, k
+        )
+        pos_results = self.search.base_pos_search(embedding_query, predicates, k)
+        adaptive_pos_results = self.search.adap_pos_search(
+            embedding_query, predicates, k, est_survivors
+        )
 
-        # Test post-filter strategy
-        post_results = self.search.pos_search(embedding_query, predicates, k, est_survivors)
+        all_results = {
+            "pre_search": pre_results,
+            "adaptive_pre_search": adaptive_pre_results,
+            "pos_search": pos_results,
+            "adaptive_pos_search": adaptive_pos_results,
+        }
 
-        # Test hybrid strategy
-        hybrid_results = self.search.search(query, predicates, k, method="pre_search")  # Use search method for hybrid
+        # All methods should return at least the minimum expected results
+        for method_name, results in all_results.items():
+            self.assertGreaterEqual(
+                len(results.results),
+                min_expected_count,
+                f"{method_name} should return at least {min_expected_count} results",
+            )
 
-        # Both strategies should return at least the minimum expected results
-        self.assertGreaterEqual(len(pre_results.results), min_expected_count)
-        self.assertGreaterEqual(len(post_results.results), min_expected_count)
-
-        # Both strategies should find results if expected_is_k is True
+        # All methods should find results if expected_is_k is True
         if expected_is_k:
-            self.assertGreater(len(pre_results.results), 0, "Pre-search should find results when expected_is_k is True")
-            self.assertGreater(len(post_results.results), 0, "Post-search should find results when expected_is_k is True")
+            for method_name, results in all_results.items():
+                self.assertGreater(
+                    len(results.results),
+                    0,
+                    f"{method_name} should find results when expected_is_k is True",
+                )
         else:
-            self.assertEqual(len(pre_results.results), 0, "Pre-search should find no results when expected_is_k is False")
-            self.assertEqual(len(post_results.results), 0, "Post-search should find no results when expected_is_k is False")
+            for method_name, results in all_results.items():
+                self.assertEqual(
+                    len(results.results),
+                    0,
+                    f"{method_name} should find no results when expected_is_k is False",
+                )
 
         # All results should be valid (non-negative similarity, valid item IDs)
-        for results in [pre_results, post_results, hybrid_results]:
+        for method_name, results in all_results.items():
             for result in results.results:
-                self.assertGreaterEqual(result.similarity, 0.0)
-                self.assertGreater(result.record.item_id, 0)
+                self.assertGreaterEqual(
+                    result.similarity,
+                    0.0,
+                    f"{method_name} should return valid similarity",
+                )
+                self.assertGreater(
+                    result.record.item_id,
+                    0,
+                    f"{method_name} should return valid item_id",
+                )
 
         # Only check for exact matches when is_k is false (not enough results found)
-        # In this case, both strategies should return all available survivors
+        # In this case, all methods should return all available survivors
         if not expected_is_k and min_expected_count > 0:
-            pre_item_ids = [result.record.item_id for result in pre_results.results]
-            post_item_ids = [result.record.item_id for result in post_results.results]
-            self.assertEqual(pre_item_ids, post_item_ids, "Pre-filter and post-filter should return identical item_ids when is_k is false")
+            item_ids_sets = {
+                method_name: set(result.record.item_id for result in results.results)
+                for method_name, results in all_results.items()
+            }
+            # All methods should return the same item_ids when is_k is false
+            first_method = list(item_ids_sets.keys())[0]
+            first_item_ids = item_ids_sets[first_method]
+            for method_name, item_ids in item_ids_sets.items():
+                self.assertEqual(
+                    item_ids,
+                    first_item_ids,
+                    f"{method_name} should return identical item_ids as {first_method} when is_k is false",
+                )
 
-        return pre_results, post_results, hybrid_results
-    
+        return all_results
+
     def test_exact_k_match(self):
         """Test case where predicates return exactly k results"""
         print("--------------------------------")
@@ -79,10 +125,10 @@ class TestHybridSearchStrategies(unittest.TestCase):
             Predicate(key="token_count", value=500, operator="<"),
             Predicate(key="revdate", value="2025-01-01", operator=">="),
         ]
-        
-        # Test both strategies - expect at least 4 results
-        self._test_both_strategies("machine learning", predicates, k, 4, True)
-    
+
+        # Test all four methods - expect at least 4 results
+        self._test_four_methods("machine learning", predicates, k, 4, True)
+
     def test_k_greater_than_available_records(self):
         """Test case where k > number of records matching predicates"""
         print("--------------------------------")
@@ -93,65 +139,65 @@ class TestHybridSearchStrategies(unittest.TestCase):
             Predicate(key="revdate", value="2025-02-01", operator=">="),
         ]
 
-        # Test both strategies - expect 0 results
-        self._test_both_strategies("machine learning", predicates, k, 0, False)
-    
+        # Test all four methods - expect 0 results
+        self._test_four_methods("machine learning", predicates, k, 0, False)
+
     def test_k_less_than_available_records(self):
         """Test case where k < number of records matching predicates"""
         print("--------------------------------")
         print("Test case where k < number of records matching predicates")
         k = 2
         predicates = [
-            Predicate(key="token_count", value=1000, operator="<"), 
+            Predicate(key="token_count", value=1000, operator="<"),
             Predicate(key="revdate", value="2025-01-01", operator=">="),
         ]
-        
-        # Test both strategies - expect at least 2 results
-        self._test_both_strategies("machine learning", predicates, k, 2, True)
-    
+
+        # Test all four methods - expect at least 2 results
+        self._test_four_methods("machine learning", predicates, k, 2, True)
+
     def test_no_matching_records(self):
         """Test case where predicates match no records"""
         print("--------------------------------")
         print("Test case where predicates match no records")
         k = 10
         predicates = [
-            Predicate(key="token_count", value=1, operator="<"), 
+            Predicate(key="token_count", value=1, operator="<"),
             Predicate(key="revdate", value="2025-02-01", operator=">="),
         ]
-        
-        # Test both strategies - expect 0 results
-        self._test_both_strategies("machine learning", predicates, k, 0, False)
-    
+
+        # Test all four methods - expect 0 results
+        self._test_four_methods("machine learning", predicates, k, 0, False)
+
     def test_empty_predicates(self):
         """Test case with empty predicates (should return all records)"""
         print("--------------------------------")
         print("Test case with empty predicates (should return all records)")
         k = 5
         predicates = []
-        
-        # Test both strategies - expect at least 5 results
-        self._test_both_strategies("machine learning", predicates, k, 5, True)
-    
+
+        # Test all four methods - expect at least 5 results
+        self._test_four_methods("machine learning", predicates, k, 5, True)
+
     def test_single_numeric_predicate(self):
         """Test with single numeric predicate"""
         print("--------------------------------")
         print("Test with single numeric predicate")
         k = 3
         predicates = [Predicate(key="token_count", value=100, operator="<")]
-        
-        # Test both strategies - expect at least 3 results
-        self._test_both_strategies("artificial intelligence", predicates, k, 3, True)
-    
+
+        # Test all four methods - expect at least 3 results
+        self._test_four_methods("artificial intelligence", predicates, k, 3, True)
+
     def test_single_date_predicate(self):
         """Test with single date predicate"""
         print("--------------------------------")
         print("Test with single date predicate")
         k = 3
         predicates = [Predicate(key="revdate", value="2025-01-15", operator=">=")]
-        
-        # Test both strategies - expect at least 3 results
-        self._test_both_strategies("deep learning", predicates, k, 3, True)
-    
+
+        # Test all four methods - expect at least 3 results
+        self._test_four_methods("deep learning", predicates, k, 3, True)
+
     def test_multiple_predicates_and_logic(self):
         """Test multiple predicates with AND logic"""
         print("--------------------------------")
@@ -160,12 +206,12 @@ class TestHybridSearchStrategies(unittest.TestCase):
         predicates = [
             Predicate(key="token_count", value=200, operator="<"),
             Predicate(key="token_count", value=50, operator=">"),
-            Predicate(key="revdate", value="2025-01-01", operator=">=")
+            Predicate(key="revdate", value="2025-01-01", operator=">="),
         ]
-        
-        # Test both strategies - expect at least 2 results
-        self._test_both_strategies("neural networks", predicates, k, 2, True)
-    
+
+        # Test all four methods - expect at least 2 results
+        self._test_four_methods("neural networks", predicates, k, 2, True)
+
     def test_boundary_values_numeric(self):
         """Test boundary values for numeric predicates"""
         print("--------------------------------")
@@ -174,22 +220,24 @@ class TestHybridSearchStrategies(unittest.TestCase):
         predicates = [
             Predicate(key="token_count", value=100, operator="="),  # Exact match
         ]
-        
-        # Test both strategies - expect at least 2 results
-        self._test_both_strategies("computer science", predicates, k, 2, True)
-    
+
+        # Test all four methods - expect at least 2 results
+        self._test_four_methods("computer science", predicates, k, 2, True)
+
     def test_boundary_values_date(self):
         """Test boundary values for date predicates"""
         print("--------------------------------")
         print("Test boundary values for date predicates")
         k = 2
         predicates = [
-            Predicate(key="revdate", value="2025-01-01", operator="="),  # Exact date match
+            Predicate(
+                key="revdate", value="2025-01-01", operator="="
+            ),  # Exact date match
         ]
-        
-        # Test both strategies - expect 0 results
-        self._test_both_strategies("data science", predicates, k, 0, False)
-    
+
+        # Test all four methods - expect 0 results
+        self._test_four_methods("data science", predicates, k, 0, False)
+
     def test_k_equal_to_one(self):
         """Test edge case where k=1"""
         print("--------------------------------")
@@ -198,10 +246,10 @@ class TestHybridSearchStrategies(unittest.TestCase):
         predicates = [
             Predicate(key="token_count", value=1000, operator="<"),
         ]
-        
-        # Test both strategies - expect at least 1 result
-        self._test_both_strategies("machine learning", predicates, k, 1, True)
-    
+
+        # Test all four methods - expect at least 1 result
+        self._test_four_methods("machine learning", predicates, k, 1, True)
+
     def test_very_large_k(self):
         """Test with very large k value"""
         print("--------------------------------")
@@ -210,10 +258,10 @@ class TestHybridSearchStrategies(unittest.TestCase):
         predicates = [
             Predicate(key="token_count", value=10000, operator="<"),
         ]
-        
-        # Test both strategies - expect at least some results (but probably not 50000)
-        self._test_both_strategies("technology", predicates, k, 1000, True)
-    
+
+        # Test all four methods - expect at least some results (but probably not 50000)
+        self._test_four_methods("technology", predicates, k, 1000, True)
+
     def test_very_restrictive_predicates(self):
         """Test with very restrictive predicates that return few records"""
         print("--------------------------------")
@@ -224,24 +272,28 @@ class TestHybridSearchStrategies(unittest.TestCase):
             Predicate(key="token_count", value=100, operator=">"),
             Predicate(key="revdate", value="2025-01-01", operator=">="),
         ]
-        
-        # Test both strategies - expect at least some results
-        self._test_both_strategies("quantum computing", predicates, k, 1, True)
 
-    
+        # Test all four methods - expect at least some results
+        self._test_four_methods("quantum computing", predicates, k, 1, True)
+
     def test_different_query_terms(self):
         """Test with different query terms to ensure search works"""
         print("--------------------------------")
         print("Test with different query terms to ensure search works")
         k = 2
         predicates = [Predicate(key="token_count", value=500, operator="<")]
-        
-        queries = ["machine learning", "deep learning", "neural networks", "artificial intelligence"]
-        
+
+        queries = [
+            "machine learning",
+            "deep learning",
+            "neural networks",
+            "artificial intelligence",
+        ]
+
         for query in queries:
             with self.subTest(query=query):
-                # Test both strategies - expect at least 2 results
-                self._test_both_strategies(query, predicates, k, 2, True)
+                # Test all four methods - expect at least 2 results
+                self._test_four_methods(query, predicates, k, 2, True)
 
 
 if __name__ == "__main__":
