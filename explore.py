@@ -1,5 +1,5 @@
 # %%
-from timer import Timer
+from timer import Timer, SearchMethod
 from search import Search
 from shared_dataclasses import Predicate
 
@@ -7,17 +7,19 @@ timer = Timer()
 search = Search(timer)
 
 query_embedding = search.embedder.encode_query("test query")
-predicates = [Predicate(key="item_id", value=[1, 2, 3], operator="IN")]
+predicates = [Predicate(key="revdate", value="2025-01-15", operator=">=")]
 k = 10
 
-results = search.base_pre_search(query_embedding, predicates, k)
-# %%
-timer.raw_times
+with timer.method_context(SearchMethod.BASE_PRE_SEARCH):
+    for _ in range(10):
+        with timer.run():
+            results = search.base_pre_search(query_embedding, predicates, k)
+
 
 # %%
 timer.runs
 # %%
-timer.save_run()
+timer._current_run
 # %%
-timer.runs
+timer.method
 # %%

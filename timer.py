@@ -1,8 +1,9 @@
+from __future__ import annotations
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Any, Tuple
-import pandas as pd
-from collections import defaultdict
+from typing import List, Tuple, Optional
+
+from enum import Enum
 
 # named tuples for type hints
 from typing import NamedTuple
@@ -10,25 +11,105 @@ from typing import NamedTuple
 TimedSection = NamedTuple(
     "TimedSection", [("section_name", str), ("execution_time", float)]
 )
-TimedRuns = List[List[TimedSection]]
+
+
+# your enums
+class SearchMethod(Enum):
+    BASE_PRE_SEARCH = 1
+    ADAP_PRE_SEARCH = 2
+    BASE_POS_SEARCH = 3
+    ADAP_POS_SEARCH = 4
+
+
+class Section(Enum):
+    DB_SEARCH = 1
+    HISTO_FILTER = 2
+    FAISS_SEARCH = 3
+    UD_PARAMS = 4
+    INTERSECT = 5
+    RESIDUAL = 6
+    FINALIZE = 7
+    TOTAL = 8
+
+
+# typed aliases
+TimedSection = Tuple[Section, float]  # (section_enum, elapsed_seconds)
+TimedRun = List[TimedSection]  # one run = list of sections
+TimedRuns = List[TimedRun]  # many runs for a method
+
+
+class MethodResults:
+    def __init__(self):
+        self.method: Optional[SearchMethod] = None
+        self.runs: TimedRuns = []  # finished runs for the current method
+        self._current_run: Optional[TimedRun] = None
 
 
 class Timer:
     """Efficient timer for tracking different parts of search methods."""
 
     def __init__(self):
-        self.raw_times: List[TimedSection] = []
-        self.runs: TimedRuns = []
+        self.method: Optional[SearchMethod] = None
+        self.runs: TimedRuns = []  # finished runs for the current method
+        self._current_run: Optional[TimedRun] = None
 
     @contextmanager
-    def section(self, name: str):
-        """Time a section of code - minimal overhead."""
+    def method_context(self, method: SearchMethod):
+        """
+        Enter a method context which can contain multiple runs.
+        We only use it when testing timing.
+        """
+        # set method-level state
+        self.method = method
+        self.runs = []
+        try:
+            yield
+        finally:
+            # we write the method results to memory for later analysis
+            # to be implemented
+            # to maintain
+            pass
+
+    @contextmanager
+    def run(self):
+        """Start a single run inside the current method."""
+        if self.method is None:
+            raise RuntimeError("Must enter method_context before starting runs.")
+        self._current_run = []
+        try:
+            yield
+        finally:
+            # finalize run and append to runs
+            assert self._current_run is not None
+            self.runs.append(self._current_run)
+            self._current_run = None
+
+    @contextmanager
+    def section(self, name: Section):
+        """Time a section of code - low overhead.
+        We only use it when testing timing.
+        """
+        if self._current_run is None:
+            # No active run: act as a no-op context so normal runs can use `with` safely
+            yield
+            return
         start = time.perf_counter()
         try:
             yield
         finally:
             elapsed = time.perf_counter() - start
-            self.raw_times.append((name, elapsed))
+            # record as enum + elapsed
+            self._current_run.append((name, elapsed))
+
+    # convenience helper to pretty-print results
+    def summarize(self) -> str:
+        lines = []
+        for i, run in enumerate(self.runs, 1):
+            total = sum(t for _, t in run)
+            lines.append(f"Run {i}: total {total:.4f}s")
+            for sec, t in run:
+                lines.append(f"  {sec.name}: {t:.4f}s")
+        return "\n".join(lines)
 
     """
     def _aggregate_times(

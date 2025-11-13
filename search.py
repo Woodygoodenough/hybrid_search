@@ -9,7 +9,7 @@ from shared_dataclasses import Predicate
 from histo2d import Histo2D
 import pandas as pd
 from settings import N_PER_CLUSTER
-from timer import Timer
+from timer import Timer, Section
 
 
 @dataclass
@@ -40,6 +40,7 @@ class Search:
     def __init__(self, timer: Timer = None):
         self.timer = timer or Timer()
         self.time_section = self.timer.section
+        self.time_method = self.timer.method_context
         self.index = FaissIVFIndex.load(FAISS_PATH)
         self.embedder = Embedder()
         self.db = DbManagement()
@@ -62,10 +63,8 @@ class Search:
         k: int,
         method: Literal["pre_search", "post_search"] = "post_search",
     ) -> HSearchResults:
-        with time_section("embedding"):
-            embedding_query = self.embedder.encode_query(query)
-        with time_section("histogram_estimation"):
-            est_survivors = self.histo.estimate_survivors(predicates)
+        embedding_query = self.embedder.encode_query(query)
+        est_survivors = self.histo.estimate_survivors(predicates)
         if method == "pre_search":
             return self.base_pre_search(embedding_query, predicates, k)
         elif method == "post_search":
@@ -84,31 +83,34 @@ class Search:
     def base_pre_search(
         self, embedding_query: np.ndarray, predicates: List[Predicate], k: int
     ) -> HSearchResults:
-        with self.time_section("base_pre_search_total"):
-            with self.time_section("pre_search_db_filter"):
+        with self.time_section(Section.TOTAL):
+            with self.time_section(Section.DB_SEARCH):
                 pre_db_records = self.db.predicates_search(predicates)
-            pre_predicate_count = len(pre_db_records)
-            if pre_predicate_count == 0:
-                return HSearchResults(results=[], is_k=False)
-
-            with self.time_section("pre_search_prepare_item_ids"):
-                pre_item_ids = [record.item_id for record in pre_db_records.records]
-
+                pre_predicate_count = len(pre_db_records)
+                if pre_predicate_count == 0:
+                    return HSearchResults(results=[], is_k=False)
+            # this automatically goes to residual time
+            pre_item_ids = [record.item_id for record in pre_db_records.records]
             nprobe = 64
             ann_results = AnnSearchResults.empty()
-            iteration = 0
             search_k = min(pre_predicate_count, k)
             while len(ann_results) < search_k:
-                with self.time_section(f"pre_search_faiss_iter_{iteration}"):
+                with self.time_section(Section.FAISS_SEARCH):
                     ann_results = self.index.search(
-                        embedding_query, search_k, nprobe=nprobe, item_ids=pre_item_ids
+                        embedding_query,
+                        search_k,
+                        nprobe=nprobe,
+                        item_ids=pre_item_ids,
                     )
-                with self.time_section(f"pre_search_update_nprobe_iter_{iteration}"):
+                with self.time_section(Section.UD_PARAMS):
                     nprobe = min(NLIST, nprobe * 3)
-                iteration += 1
-            with self.time_section("pre_search_intersect"):
+            with self.time_section(Section.INTERSECT):
                 pre_top_results = self._intersect(ann_results, pre_db_records)
-            return HSearchResults(results=pre_top_results, is_k=search_k == k)
+            with self.time_section(Section.FINALIZE):
+                return HSearchResults(
+                    results=pre_top_results[:search_k],
+                    is_k=len(pre_top_results) == search_k,
+                )
 
     def base_pos_search(
         self,
@@ -116,92 +118,93 @@ class Search:
         predicates: List[Predicate],
         k: int,
     ) -> HSearchResults:
-        with self.time_section("base_pos_search_total"):
+
+        with self.time_section(Section.TOTAL):
             search_k = 100
             nprobe = 64
-            iteration = 0
             top_results: List[HSearchResult] = []
 
-            while len(top_results) < search_k:
+            # for pos search, we do not know how many results we will get
+            # we keep trying, untill we get k, or we reach the full dataset
+            while len(top_results) < k:
                 # Get next search parameters with aggressive growth
                 # If we've reached the full dataset, search everything
                 if search_k >= N:
                     search_k = N
                     nprobe = NLIST
 
-                with self.time_section(f"adaptive_pos_search_faiss_iter_{iteration}"):
+                with self.time_section(Section.FAISS_SEARCH):
                     ann_results = self.index.search(
                         embedding_query, search_k, nprobe=nprobe, item_ids=None
                     )
-                with self.time_section(
-                    f"adaptive_pos_search_prepare_predicates_iter_{iteration}"
-                ):
-                    item_ids_predicate = Predicate(
-                        key="item_id",
-                        value=ann_results.item_ids.tolist(),
-                        operator="IN",
-                    )
-                    predicates_copy = predicates.copy()
-                    predicates_copy.append(item_ids_predicate)
-                with self.time_section(
-                    f"adaptive_pos_search_db_filter_iter_{iteration}"
-                ):
+
+                item_ids_predicate = Predicate(
+                    key="item_id",
+                    value=ann_results.item_ids.tolist(),
+                    operator="IN",
+                )
+                predicates_copy = predicates.copy()
+                predicates_copy.append(item_ids_predicate)
+                with self.time_section(Section.DB_SEARCH):
                     post_db_records = self.db.predicates_search(predicates_copy)
-                with self.time_section(
-                    f"adaptive_pos_search_intersect_iter_{iteration}"
-                ):
+                with self.time_section(Section.INTERSECT):
                     top_results = self._intersect(ann_results, post_db_records)
 
                 # Break if we've reached the full dataset
                 if search_k >= N:
                     break
-                with self.time_section(
-                    f"adaptive_pos_search_update_params_iter_{iteration}"
-                ):
+                with self.time_section(Section.UD_PARAMS):
                     search_k = min(search_k * 3, N)
                     nprobe = min(NLIST, nprobe * 3)
-                iteration += 1
 
             # HSearchResults always sorts by similarity
-            with self.time_section("adaptive_pos_search_finalize"):
+            with self.time_section(Section.FINALIZE):
                 return HSearchResults(
-                    results=top_results[:k], is_k=len(top_results) >= k
+                    # [:k] will limit the results to k items
+                    # or all items if we have less than k (native python behavior)
+                    results=top_results[:k],
+                    is_k=len(top_results) == k,
                 )
 
     def adap_pre_search(
         self, embedding_query: np.ndarray, predicates: List[Predicate], k: int
     ) -> HSearchResults:
-        with self.time_section("adap_pre_search_total"):
-            with self.time_section("adaptive_pre_search_db_filter"):
+        with self.time_section(Section.TOTAL):
+            with self.time_section(Section.DB_SEARCH):
                 pre_db_records = self.db.predicates_search(predicates)
             pre_predicate_count = len(pre_db_records)
             if pre_predicate_count == 0:
                 return HSearchResults(results=[], is_k=False)
 
-            with self.time_section("adaptive_pre_search_prepare_item_ids"):
-                pre_item_ids = [record.item_id for record in pre_db_records.records]
-
+            pre_item_ids = [record.item_id for record in pre_db_records.records]
             nprobe = 0
             ann_results = AnnSearchResults.empty()
-            iteration = 0
-
+            # here we will know how many results we can get, so we can set search_k accordingly
             search_k = min(pre_predicate_count, k)
             while len(ann_results) < search_k:
-                with self.time_section(
-                    f"adaptive_pre_search_opt_nprobe_iter_{iteration}"
-                ):
+                with self.time_section(Section.UD_PARAMS):
                     nprobe = self._opt_pre_nprobe(
                         pre_predicate_count, search_k - len(ann_results), nprobe
                     )
-                with self.time_section(f"adaptive_pre_search_faiss_iter_{iteration}"):
+                with self.time_section(Section.FAISS_SEARCH):
                     ann_results = self.index.search(
-                        embedding_query, search_k, nprobe=nprobe, item_ids=pre_item_ids
+                        embedding_query,
+                        search_k,
+                        nprobe=nprobe,
+                        item_ids=pre_item_ids,
                     )
-                iteration += 1
-            with self.time_section("adaptive_pre_search_intersect"):
+            with self.time_section(Section.INTERSECT):
                 pre_top_results = self._intersect(ann_results, pre_db_records)
-            # we always know how many results we will get, so we simply return the results
-            return HSearchResults(results=pre_top_results, is_k=search_k == k)
+            with self.time_section(Section.FINALIZE):
+                return HSearchResults(
+                    # [:k] will limit the results to k items
+                    # or all items if we have less than k (native python behavior)
+                    # here we should always get correct number of pre_top_results because
+                    # we set search_k to min(pre_predicate_count, k)
+                    # but we simply keep the same finalizing code for simplicity
+                    results=pre_top_results[:k],
+                    is_k=len(pre_top_results) == k,
+                )
 
     def adap_pos_search(
         self,
@@ -210,16 +213,13 @@ class Search:
         k: int,
         est_survivors: int,
     ) -> HSearchResults:
-        with self.time_section("adap_pos_search_total"):
+        with self.time_section(Section.TOTAL):
             search_k = 0
-            iteration = 0
+            nprobe = 0
             top_results: List[HSearchResult] = []
-
             while len(top_results) < k:
                 # Get next search parameters with aggressive growth
-                with self.time_section(
-                    f"adaptive_pos_search_opt_params_iter_{iteration}"
-                ):
+                with self.time_section(Section.UD_PARAMS):
                     search_k, nprobe = self._opt_pos_search_k_and_nprobe(
                         est_survivors, k - len(top_results), search_k
                     )
@@ -228,40 +228,34 @@ class Search:
                     search_k = N
                     nprobe = NLIST
 
-                with self.time_section(f"adaptive_pos_search_faiss_iter_{iteration}"):
+                with self.time_section(Section.FAISS_SEARCH):
                     ann_results = self.index.search(
                         embedding_query, search_k, nprobe=nprobe, item_ids=None
                     )
+                item_ids_predicate = Predicate(
+                    key="item_id",
+                    value=ann_results.item_ids.tolist(),
+                    operator="IN",
+                )
+                predicates_copy = predicates.copy()
+                predicates_copy.append(item_ids_predicate)
 
-                with self.time_section(
-                    f"adaptive_pos_search_prepare_predicates_iter_{iteration}"
-                ):
-                    item_ids_predicate = Predicate(
-                        key="item_id",
-                        value=ann_results.item_ids.tolist(),
-                        operator="IN",
-                    )
-                    predicates_copy = predicates.copy()
-                    predicates_copy.append(item_ids_predicate)
-
-                with self.time_section(
-                    f"adaptive_pos_search_db_filter_iter_{iteration}"
-                ):
+                with self.time_section(Section.DB_SEARCH):
                     post_db_records = self.db.predicates_search(predicates_copy)
 
-                with self.time_section(
-                    f"adaptive_pos_search_intersect_iter_{iteration}"
-                ):
+                with self.time_section(Section.INTERSECT):
                     top_results = self._intersect(ann_results, post_db_records)
 
                 # Break if we've reached the full dataset
                 if search_k >= N:
                     break
 
-                iteration += 1
-
             # HSearchResults always sorts by similarity
-            return HSearchResults(results=top_results[:k], is_k=len(top_results) >= k)
+            with self.time_section(Section.FINALIZE):
+                return HSearchResults(
+                    results=top_results[:k],
+                    is_k=len(top_results) == k,
+                )
 
     def _opt_pre_nprobe(
         self, predicate_count: int, k_remaining: int, old_nprobe: int = 0
@@ -291,7 +285,6 @@ class Search:
             search_k = N
             nprobe = NLIST
         else:
-            # Much more aggressive exponential growth
             if old_search_k == 0:
                 # Start with a reasonable initial search based on selectivity
                 if est_survivors >= N * 0.1:  # Low selectivity
