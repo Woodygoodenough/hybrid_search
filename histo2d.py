@@ -220,6 +220,7 @@ class Histo2D:
 
     def estimate_survivors(self, predicates: List[Predicate]) -> int:
         """Estimate survivors count given predicates by summing bins consistent with predicates.
+        Uses linear interpolation for bins that are partially included.
 
         Semantics:
         - revdate predicates compare against bin timestamps. Predicate value is already normalized to 'YYYY-MM-DD HH:MM:SS' so we can compare directly.
@@ -236,70 +237,99 @@ class Histo2D:
         rev_lo = self.revdate_bins[:-1].astype(float)
         rev_hi = self.revdate_bins[1:].astype(float)
 
-        # Initialize masks (rows for token, cols for revdate)
-        row_mask = np.ones(self.counts.shape[0], dtype=bool)
-        col_mask = np.ones(self.counts.shape[1], dtype=bool)
+        # Initialize fractional weights (rows for token, cols for revdate)
+        row_weights = np.ones(self.counts.shape[0], dtype=float)
+        col_weights = np.ones(self.counts.shape[1], dtype=float)
 
         for p in predicates:
             if p.key == 'token_count':
                 v = float(p.value)
+                token_widths = token_hi - token_lo
+                new_row_weights = np.zeros(self.counts.shape[0], dtype=float)
                 if p.operator == '>':
-                    row_mask &= (token_hi > v)
+                    # Fully included if token_lo > v, partially if token_lo <= v < token_hi
+                    full_mask = token_lo > v
+                    partial_mask = (token_lo <= v) & (token_hi > v)
+                    new_row_weights[full_mask] = 1.0
+                    new_row_weights[partial_mask] = np.maximum(0.0, (token_hi[partial_mask] - v) / token_widths[partial_mask])
                 elif p.operator == '>=':
-                    row_mask &= (token_hi >= v)
+                    # Fully included if token_lo >= v, partially if token_lo < v <= token_hi
+                    full_mask = token_lo >= v
+                    partial_mask = (token_lo < v) & (token_hi >= v)
+                    new_row_weights[full_mask] = 1.0
+                    new_row_weights[partial_mask] = np.maximum(0.0, (token_hi[partial_mask] - v) / token_widths[partial_mask])
                 elif p.operator == '<':
-                    row_mask &= (token_lo < v)
+                    # Fully included if token_hi < v, partially if token_lo < v <= token_hi
+                    full_mask = token_hi < v
+                    partial_mask = (token_lo < v) & (token_hi >= v)
+                    new_row_weights[full_mask] = 1.0
+                    new_row_weights[partial_mask] = np.maximum(0.0, (v - token_lo[partial_mask]) / token_widths[partial_mask])
                 elif p.operator == '<=':
-                    row_mask &= (token_lo <= v)
+                    # Fully included if token_hi <= v, partially if token_lo <= v < token_hi
+                    full_mask = token_hi <= v
+                    partial_mask = (token_lo <= v) & (token_hi > v)
+                    new_row_weights[full_mask] = 1.0
+                    new_row_weights[partial_mask] = np.maximum(0.0, (v - token_lo[partial_mask]) / token_widths[partial_mask])
                 elif p.operator == '=':
                     # Treat = as a narrow range query (v-0.5 to v+0.5)
-                    row_mask &= (token_lo <= v) & (token_hi >= v)
+                    new_row_weights = ((token_lo <= v) & (token_hi >= v)).astype(float)
                 elif p.operator == 'IN':
                     # For IN operator, create a mask for any of the values
-                    if isinstance(p.value, list):
-                        in_mask = np.zeros(self.counts.shape[0], dtype=bool)
-                        for val in p.value:
-                            val = float(val)
-                            in_mask |= (token_lo <= val) & (token_hi >= val)
-                        row_mask &= in_mask
-                    else:
-                        # Single value in list
-                        val = float(p.value)
-                        row_mask &= (token_lo <= val) & (token_hi >= val)
+                    in_mask = np.zeros(self.counts.shape[0], dtype=bool)
+                    for val in (p.value if isinstance(p.value, list) else [p.value]):
+                        val = float(val)
+                        in_mask |= (token_lo <= val) & (token_hi >= val)
+                    new_row_weights = in_mask.astype(float)
+                row_weights = row_weights * new_row_weights
             elif p.key == 'revdate':
                 # p.value already normalized to 'YYYY-MM-DD HH:MM:SS'
                 t = datetime.strptime(str(p.value), "%Y-%m-%d %H:%M:%S").timestamp()
+                rev_widths = rev_hi - rev_lo
+                new_col_weights = np.zeros(self.counts.shape[1], dtype=float)
                 if p.operator == '>':
-                    col_mask &= (rev_hi > t)
+                    # Fully included if rev_lo > t, partially if rev_lo <= t < rev_hi
+                    full_mask = rev_lo > t
+                    partial_mask = (rev_lo <= t) & (rev_hi > t)
+                    new_col_weights[full_mask] = 1.0
+                    new_col_weights[partial_mask] = np.maximum(0.0, (rev_hi[partial_mask] - t) / rev_widths[partial_mask])
                 elif p.operator == '>=':
-                    col_mask &= (rev_hi >= t)
+                    # Fully included if rev_lo >= t, partially if rev_lo < t <= rev_hi
+                    full_mask = rev_lo >= t
+                    partial_mask = (rev_lo < t) & (rev_hi >= t)
+                    new_col_weights[full_mask] = 1.0
+                    new_col_weights[partial_mask] = np.maximum(0.0, (rev_hi[partial_mask] - t) / rev_widths[partial_mask])
                 elif p.operator == '<':
-                    col_mask &= (rev_lo < t)
+                    # Fully included if rev_hi < t, partially if rev_lo < t <= rev_hi
+                    full_mask = rev_hi < t
+                    partial_mask = (rev_lo < t) & (rev_hi >= t)
+                    new_col_weights[full_mask] = 1.0
+                    new_col_weights[partial_mask] = np.maximum(0.0, (t - rev_lo[partial_mask]) / rev_widths[partial_mask])
                 elif p.operator == '<=':
-                    col_mask &= (rev_lo <= t)
+                    # Fully included if rev_hi <= t, partially if rev_lo <= t < rev_hi
+                    full_mask = rev_hi <= t
+                    partial_mask = (rev_lo <= t) & (rev_hi > t)
+                    new_col_weights[full_mask] = 1.0
+                    new_col_weights[partial_mask] = np.maximum(0.0, (t - rev_lo[partial_mask]) / rev_widths[partial_mask])
                 elif p.operator == '=':
                     # Treat = as a narrow range query (t to t + small delta)
-                    # Since we're dealing with timestamps, use a small range around the exact time
-                    col_mask &= (rev_lo <= t) & (rev_hi >= t)
+                    new_col_weights = ((rev_lo <= t) & (rev_hi >= t)).astype(float)
                 elif p.operator == 'IN':
                     # For IN operator, create a mask for any of the values
-                    if isinstance(p.value, list):
-                        in_mask = np.zeros(self.counts.shape[1], dtype=bool)
-                        for val in p.value:
-                            t_val = datetime.strptime(str(val), "%Y-%m-%d %H:%M:%S").timestamp()
-                            in_mask |= (rev_lo <= t_val) & (rev_hi >= t_val)
-                        col_mask &= in_mask
-                    else:
-                        # Single value in list
-                        t_val = datetime.strptime(str(p.value), "%Y-%m-%d %H:%M:%S").timestamp()
-                        col_mask &= (rev_lo <= t_val) & (rev_hi >= t_val)
+                    in_mask = np.zeros(self.counts.shape[1], dtype=bool)
+                    for val in (p.value if isinstance(p.value, list) else [p.value]):
+                        t_val = datetime.strptime(str(val), "%Y-%m-%d %H:%M:%S").timestamp()
+                        in_mask |= (rev_lo <= t_val) & (rev_hi >= t_val)
+                    new_col_weights = in_mask.astype(float)
+                col_weights = col_weights * new_col_weights
             else:
                 raise ValueError(f"Invalid predicate key: {p.key}. Only 'revdate' and 'token_count' are supported.")
 
-        if not row_mask.any() or not col_mask.any():
+        if not row_weights.any() or not col_weights.any():
             return 0
 
-        return int(self.counts[row_mask][:, col_mask].sum())
+        # Apply weights: multiply counts by row and column weights
+        weighted_counts = self.counts * row_weights[:, np.newaxis] * col_weights[np.newaxis, :]
+        return int(weighted_counts.sum())
 
     def revdate_edges_df(self):
         """Return a DataFrame with exact revdate bin separating points with full timestamp."""
