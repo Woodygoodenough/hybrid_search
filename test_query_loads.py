@@ -7,37 +7,37 @@ from shared_dataclasses import Predicate
 db = DbManagement()
 histo = Histo2D.from_records(db.predicates_search([]))
 
-# Hardcoded single predicate queries (5 queries)
+# Hardcoded single predicate queries (5 queries) - evenly distributed
 single_queries = [
-    [Predicate(key="revdate", value="2025-02-19 19:10:19", operator=">=")],
-    [Predicate(key="token_count", value=6763, operator=">=")],
-    [Predicate(key="revdate", value="2025-02-19 13:58:20", operator=">=")],
-    [Predicate(key="token_count", value=3908, operator=">=")],
-    [Predicate(key="revdate", value="2025-02-19 05:14:37", operator=">=")],
+    [Predicate(key="revdate", value="2025-02-19 19:08:15", operator=">=")],  # ~15k
+    [Predicate(key="revdate", value="2025-02-19 05:16:42", operator=">=")],  # ~45k
+    [Predicate(key="revdate", value="2025-02-18 06:42:18", operator=">=")],  # ~75k
+    [Predicate(key="revdate", value="2025-01-26 07:03:28", operator=">=")],  # ~105k
+    [Predicate(key="token_count", value=75, operator=">=")],  # ~150k
 ]
 
-# Hardcoded dual predicate queries (5 queries)
+# Hardcoded dual predicate queries (5 queries) - evenly distributed
 dual_queries = [
     [
-        Predicate(key="token_count", value=2575, operator=">="),
-        Predicate(key="revdate", value="2025-02-19 05:14:37", operator=">="),
-    ],
+        Predicate(key="token_count", value=51, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 13:58:20", operator=">="),
+    ],  # ~30k
     [
-        Predicate(key="token_count", value=1786, operator=">="),
-        Predicate(key="revdate", value="2025-02-19 05:14:37", operator=">="),
-    ],
-    [
-        Predicate(key="token_count", value=2575, operator=">="),
+        Predicate(key="token_count", value=101, operator=">="),
         Predicate(key="revdate", value="2025-02-18 20:27:31", operator=">="),
-    ],
+    ],  # ~60k
     [
-        Predicate(key="token_count", value=1289, operator=">="),
-        Predicate(key="revdate", value="2025-02-19 05:14:37", operator=">="),
-    ],
+        Predicate(key="token_count", value=151, operator=">="),
+        Predicate(key="revdate", value="2025-02-17 14:19:47", operator=">="),
+    ],  # ~90k
     [
-        Predicate(key="token_count", value=2575, operator=">="),
-        Predicate(key="revdate", value="2025-02-18 06:44:23", operator=">="),
-    ],
+        Predicate(key="token_count", value=200, operator=">="),
+        Predicate(key="revdate", value="2025-01-24 02:40:15", operator=">="),
+    ],  # ~120k
+    [
+        Predicate(key="token_count", value=250, operator=">="),
+        Predicate(key="revdate", value="2025-01-22 10:15:26", operator=">="),
+    ],  # ~135k
 ]
 
 # Print results
