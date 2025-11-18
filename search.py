@@ -9,7 +9,7 @@ from shared_dataclasses import Predicate
 from histo2d import Histo2D
 import pandas as pd
 from settings import N_PER_CLUSTER
-from timer import Timer, Section
+from timer import Timer, Section, SearchMethod
 
 
 @dataclass
@@ -61,14 +61,18 @@ class Search:
         query: str,
         predicates: List[Predicate],
         k: int,
-        method: Literal["pre_search", "post_search"] = "post_search",
+        method: SearchMethod,
     ) -> HSearchResults:
         embedding_query = self.embedder.encode_query(query)
         est_survivors = self.histo.estimate_survivors(predicates)
-        if method == "pre_search":
+        if method == SearchMethod.BASE_PRE_SEARCH:
             return self.base_pre_search(embedding_query, predicates, k)
-        elif method == "post_search":
-            return self.base_pos_search(embedding_query, predicates, k, est_survivors)
+        elif method == SearchMethod.BASE_POS_SEARCH:
+            return self.base_pos_search(embedding_query, predicates, k)
+        elif method == SearchMethod.ADAP_PRE_SEARCH:
+            return self.adap_pre_search(embedding_query, predicates, k)
+        elif method == SearchMethod.ADAP_POS_SEARCH:
+            return self.adap_pos_search(embedding_query, predicates, k, est_survivors)
         else:
             raise ValueError(f"Invalid method: {method}")
 
@@ -118,7 +122,6 @@ class Search:
         predicates: List[Predicate],
         k: int,
     ) -> HSearchResults:
-
         with self.time_section(Section.TOTAL):
             search_k = 100
             nprobe = 64
@@ -170,6 +173,11 @@ class Search:
         self, embedding_query: np.ndarray, predicates: List[Predicate], k: int
     ) -> HSearchResults:
         with self.time_section(Section.TOTAL):
+            # we do not need histo at this point, but we want to time it because it
+            # is part of the adap search
+            # delete THIS when deploying
+            with self.time_section(Section.HISTO_FILTER):
+                _ = self.histo.estimate_survivors(predicates)
             with self.time_section(Section.DB_SEARCH):
                 pre_db_records = self.db.predicates_search(predicates)
             pre_predicate_count = len(pre_db_records)
@@ -214,6 +222,10 @@ class Search:
         est_survivors: int,
     ) -> HSearchResults:
         with self.time_section(Section.TOTAL):
+            # we already have est_survivors, but we still want to time est
+            # delete THIS when deploying
+            with self.time_section(Section.HISTO_FILTER):
+                _ = self.histo.estimate_survivors(predicates)
             search_k = 0
             nprobe = 0
             top_results: List[HSearchResult] = []
