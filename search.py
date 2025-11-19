@@ -240,6 +240,10 @@ class Search:
                     search_k = N
                     nprobe = NLIST
 
+                print(
+                    f"adap_pos_search: search_k={search_k}, k_remaining={k - len(top_results)}, results_found={len(top_results)}, est_survivors={est_survivors}"
+                )
+
                 with self.time_section(Section.FAISS_SEARCH):
                     ann_results = self.index.search(
                         embedding_query, search_k, nprobe=nprobe, item_ids=None
@@ -257,6 +261,8 @@ class Search:
 
                 with self.time_section(Section.INTERSECT):
                     top_results = self._intersect(ann_results, post_db_records)
+
+                print(f"  -> After search: results_found={len(top_results)}/{k}")
 
                 # Break if we've reached the full dataset
                 if search_k >= N:
@@ -279,7 +285,7 @@ class Search:
         # the expected number of clusters to search is k / (predicate_count / NLIST)
         expected_nprobe = k_remaining * NLIST // predicate_count + old_nprobe
         # Use 3x multiplier for safety to ensure we get enough results
-        return max(3, min(3 * expected_nprobe, NLIST))
+        return max(1, min(3 * expected_nprobe, NLIST))
 
     def _opt_pos_search_k_and_nprobe(
         self,
@@ -288,29 +294,29 @@ class Search:
         old_search_k: int = 0,
         old_nprobe: int = 0,
     ):
-        """
-        Find the optimal search_k and nprobe for the query and est_survivors.
-        Aggressive exponential growth to reach N quickly.
-        """
         if est_survivors == 0:
             # If no survivors expected, search the entire dataset
             search_k = N
             nprobe = NLIST
         else:
-            if old_search_k == 0:
-                # Start with a reasonable initial search based on selectivity
-                if est_survivors >= N * 0.1:  # Low selectivity
-                    base_search_k = N // 10  # Start with 10% of dataset
-                else:  # High selectivity
-                    base_search_k = max(
-                        k_remaining * 10, int(N / est_survivors * k_remaining * 5)
-                    )
-            else:
-                # Exponential growth: 3x the previous size to converge quickly
-                base_search_k = old_search_k * 3
-
-            search_k = min(N, base_search_k)
-            nprobe = min(NLIST, max(1, search_k // N_PER_CLUSTER * 4 + old_nprobe + 1))
+            # possibility of any one entry to be a survivor is est_survivors / N
+            # we expect to find k survivors, so we need to search for k * N / est_survivors entries
+            # we use a 3x multiplier to be safe
+            expected_search_k = (
+                3 * k_remaining * N // max(est_survivors, 1)
+                # note the 3 below is not "optimal", we should not add this multiple if we stick with statistical expectation
+                # however, let's consider an edge case. assume there is actually 0 survivors, and we only request 3 results,
+                # search_k will only grow linearly, which takes a lot of iterations to reach N before algo terminates
+                # so we applied this multiplier to handle edge cases, this should add minimum overhead,
+                # since in most cases only the first iteration is required
+                + 3 * old_search_k
+            )
+            search_k = min(N, expected_search_k)
+            # per cluster, we expect to have est_survivors / NLIST survivors
+            # we expect to find search_k results, so we need to search for search_k * NLIST / est_survivors clusters
+            # note we already applied 3x multiplier to search_k, so for now nprobe should already be large enough
+            expected_nprobe = search_k * NLIST // max(est_survivors, 1) + old_nprobe
+            nprobe = min(NLIST, max(1, expected_nprobe))
         return search_k, nprobe
 
     @staticmethod

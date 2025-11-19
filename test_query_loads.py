@@ -3,9 +3,16 @@
 from dbManagement import DbManagement
 from histo2d import Histo2D
 from shared_dataclasses import Predicate
+from timer import Timer, SearchMethod, TimedMethodResult, TimedPredicatesResults
+from search import Search
+from typing import List
+import pandas as pd
 
 db = DbManagement()
 histo = Histo2D.from_records(db.predicates_search([]))
+timer = Timer()
+search = Search(timer)
+query = "test query"
 
 # Hardcoded single predicate queries (5 queries) - evenly distributed
 single_queries = [
@@ -40,17 +47,70 @@ dual_queries = [
     ],  # ~135k
 ]
 
-# Print results
-print("SINGLE PREDICATE QUERIES:")
-for i, predicates in enumerate(single_queries, 1):
-    est = histo.estimate_survivors(predicates)
-    actual = len(db.predicates_search(predicates))
-    pred_str = ", ".join([f"{p.key} {p.operator} {p.value}" for p in predicates])
-    print(f"{i}. {pred_str} | Est: {est} | Actual: {actual}")
+all_queries = single_queries + dual_queries
 
-print("\nDUAL PREDICATE QUERIES:")
-for i, predicates in enumerate(dual_queries, 1):
-    est = histo.estimate_survivors(predicates)
-    actual = len(db.predicates_search(predicates))
-    pred_str = ", ".join([f"{p.key} {p.operator} {p.value}" for p in predicates])
-    print(f"{i}. {pred_str} | Est: {est} | Actual: {actual}")
+
+def time_predicates(predicates: List[Predicate], k: int):
+    timed_method_results = []
+    for method in SearchMethod:
+        with timer.method_context(method):
+            for _ in range(1):
+                with timer.run():
+                    results = search.search(query, predicates, k, method)
+            # Create TimedMethodResult after all runs for this method
+            timed_method_results.append(
+                TimedMethodResult.from_raw_method_runs((timer.method, timer.runs))
+            )
+    return TimedPredicatesResults(
+        predicates=predicates, timed_method_results=timed_method_results
+    )
+
+
+# Test with k=5, k=10, and k=2000
+for k in [5, 10, 5000]:
+    print(f"\n{'='*80}")
+    print(f"TESTING WITH k={k}")
+    print(f"{'='*80}\n")
+
+    all_results = []
+    for i, predicates in enumerate(all_queries, 1):
+        est = histo.estimate_survivors(predicates)
+        actual = len(db.predicates_search(predicates))
+        pred_str = ", ".join([f"{p.key} {p.operator} {p.value}" for p in predicates])
+
+        print(f"Query {i}: {pred_str}")
+        print(f"  Est survivors: {est} | Actual: {actual}")
+
+        timed_predicates_results = time_predicates(predicates, k)
+        df = timed_predicates_results.to_df()
+        df["query_num"] = i
+        df["k"] = k
+        df["est_survivors"] = est
+        df["actual_survivors"] = actual
+        all_results.append(df)
+
+        # Print timing summary
+        print(f"  Timing (ms):")
+        for _, row in df.iterrows():
+            print(
+                f"    {row['method']}: total={row['total']:.2f}, db={row['db_search']:.2f}, faiss={row['faiss_search']:.2f}"
+            )
+        print()
+
+    # Combine all results
+    if all_results:
+        combined_df = pd.concat(all_results, ignore_index=True)
+        print(f"\nSummary for k={k}:")
+        print(
+            combined_df[
+                [
+                    "query_num",
+                    "method",
+                    "total",
+                    "db_search",
+                    "faiss_search",
+                    "est_survivors",
+                ]
+            ].to_string()
+        )
+        print()

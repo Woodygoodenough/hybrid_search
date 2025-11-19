@@ -18,6 +18,7 @@ All four methods should return identical results when is_k is false, and same co
 import unittest
 from search import Search
 from dbManagement import Predicate
+from timer import SearchMethod
 
 
 class TestHybridSearchStrategies(unittest.TestCase):
@@ -39,24 +40,24 @@ class TestHybridSearchStrategies(unittest.TestCase):
     ):
         """Helper method to test all four search methods."""
         # Encode query once for all methods
-        embedding_query = self.search.embedder.encode_query(query)
-        est_survivors = self.search.histo.estimate_survivors(predicates)
-
-        # Test all four methods
-        pre_results = self.search.base_pre_search(embedding_query, predicates, k)
-        adaptive_pre_results = self.search.adap_pre_search(
-            embedding_query, predicates, k
+        base_pre_results = self.search.search(
+            query, predicates, k, SearchMethod.BASE_PRE_SEARCH
         )
-        pos_results = self.search.base_pos_search(embedding_query, predicates, k)
-        adaptive_pos_results = self.search.adap_pos_search(
-            embedding_query, predicates, k, est_survivors
+        adap_pre_results = self.search.search(
+            query, predicates, k, SearchMethod.ADAP_PRE_SEARCH
+        )
+        base_pos_results = self.search.search(
+            query, predicates, k, SearchMethod.BASE_POS_SEARCH
+        )
+        adap_pos_results = self.search.search(
+            query, predicates, k, SearchMethod.ADAP_POS_SEARCH
         )
 
         all_results = {
-            "pre_search": pre_results,
-            "adaptive_pre_search": adaptive_pre_results,
-            "pos_search": pos_results,
-            "adaptive_pos_search": adaptive_pos_results,
+            "base_pre_search": base_pre_results,
+            "adap_pre_search": adap_pre_results,
+            "base_pos_search": base_pos_results,
+            "adap_pos_search": adap_pos_results,
         }
 
         # All methods should return at least the minimum expected results

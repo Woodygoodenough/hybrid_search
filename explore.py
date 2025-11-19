@@ -9,22 +9,22 @@ search = Search(timer)
 
 query = "test query"
 predicates = [Predicate(key="revdate", value="2025-01-15", operator=">=")]
-k = 1
+k = 5
 
 
 def time_predicates(predicates: List[Predicate], k: int):
     timed_method_results = []
     for method in SearchMethod:
         with timer.method_context(method):
-            for _ in range(k):
+            for _ in range(1):
                 with timer.run():
                     results = search.search(query, predicates, k, method)
-                timed_method_results.append(
-                    TimedMethodResult.from_raw_method_runs((timer.method, timer.runs))
-                )
-                timer.reset()
+            # Create TimedMethodResult after all runs for this method
+            timed_method_results.append(
+                TimedMethodResult.from_raw_method_runs((timer.method, timer.runs))
+            )
     return TimedPredicatesResults(
-        predicates=predicates, timed_method_results=timed_method_results
+        predicates=predicates, timed_method_results=timed_method_results, k=k
     )
 
 
