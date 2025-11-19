@@ -3,12 +3,11 @@ from dataclasses import dataclass
 from typing import Optional, List, Literal
 import numpy as np
 from vector_index import Embedder, FaissIVFIndex, AnnSearchResults
-from settings import FAISS_PATH, NPROBE, NLIST, N
+from settings import FAISS_PATH, NLIST, N
 from dbManagement import DbManagement, DBRecord, DBRecords
 from shared_dataclasses import Predicate
 from histo2d import Histo2D
 import pandas as pd
-from settings import N_PER_CLUSTER
 from timer import Timer, Section, SearchMethod
 
 
