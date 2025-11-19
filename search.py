@@ -37,13 +37,13 @@ class HSearchResults:
 
 
 class Search:
-    def __init__(self, timer: Timer = None):
+    def __init__(self, timer: Timer = None, db: DbManagement = None):
         self.timer = timer or Timer()
         self.time_section = self.timer.section
         self.time_method = self.timer.method_context
         self.index = FaissIVFIndex.load(FAISS_PATH)
         self.embedder = Embedder()
-        self.db = DbManagement()
+        self.db = db or DbManagement()
         self.histo = Histo2D.from_records(self.db.predicates_search([]))
 
     def __enter__(self):
@@ -240,10 +240,6 @@ class Search:
                     search_k = N
                     nprobe = NLIST
 
-                print(
-                    f"adap_pos_search: search_k={search_k}, k_remaining={k - len(top_results)}, results_found={len(top_results)}, est_survivors={est_survivors}"
-                )
-
                 with self.time_section(Section.FAISS_SEARCH):
                     ann_results = self.index.search(
                         embedding_query, search_k, nprobe=nprobe, item_ids=None
@@ -261,8 +257,6 @@ class Search:
 
                 with self.time_section(Section.INTERSECT):
                     top_results = self._intersect(ann_results, post_db_records)
-
-                print(f"  -> After search: results_found={len(top_results)}/{k}")
 
                 # Break if we've reached the full dataset
                 if search_k >= N:

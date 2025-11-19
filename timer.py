@@ -168,9 +168,12 @@ class TimedMethodResult:
         )
 
     def to_ave_df(self) -> pd.DataFrame:
+        method_name = self.method.name.replace("SearchMethod.", "").replace(
+            "_SEARCH", ""
+        )
         return pd.DataFrame(
             {
-                "method": [self.method],
+                "method": [method_name],
                 "total": [self.total / self.num_runs],
                 "iterations": [self.iterations],
                 "db_search": [self.db_search / self.num_runs],
@@ -188,10 +191,14 @@ class TimedMethodResult:
 class TimedPredicatesResults:
     predicates: List[Predicate]
     timed_method_results: List[TimedMethodResult]
+    k: int
+    num_survivors: int
 
     def to_df(self) -> pd.DataFrame:
         df = pd.DataFrame()
         # we know do not add predicates to the dataframe. maybe later with other representations.
         for timed_method_result in self.timed_method_results:
             df = pd.concat([df, timed_method_result.to_ave_df()])
+        df["k"] = self.k
+        df["num_survivors"] = self.num_survivors
         return df
