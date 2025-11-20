@@ -38,5 +38,9 @@ class Predicate:
                 return dt.strftime("%Y-%m-%d %H:%M:%S")
             except ValueError:
                 continue
-        raise ValueError(f"Unsupported date format for predicate value '{s}', possible formats: %Y-%m-%d %H:%M:%S, %Y-%m-%d %H:%M, %Y-%m-%d")
+        raise ValueError(
+            f"Unsupported date format for predicate value '{s}', possible formats: %Y-%m-%d %H:%M:%S, %Y-%m-%d %H:%M, %Y-%m-%d"
+        )
 
+    def __str__(self) -> str:
+        return f"{self.key} {self.operator} {self.value}"

@@ -47,7 +47,30 @@ dual_queries = [
     ],  # ~135k
 ]
 
-all_queries = single_queries + dual_queries
+# Very selective queries (low survivor counts) - mix of single and dual
+very_selective_queries = [
+    # ~100 survivors - dual predicate
+    [
+        Predicate(key="token_count", value=450, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 23:47:33", operator=">="),
+    ],
+    # ~300 survivors - single predicate
+    [Predicate(key="token_count", value=400, operator=">=")],
+    # ~500 survivors - dual predicate
+    [
+        Predicate(key="token_count", value=380, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 21:15:28", operator=">="),
+    ],
+    # ~1000 survivors - single predicate
+    [Predicate(key="token_count", value=350, operator=">=")],
+    # ~5000 survivors - dual predicate
+    [
+        Predicate(key="token_count", value=300, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 18:42:17", operator=">="),
+    ],
+]
+
+all_queries = single_queries + dual_queries + very_selective_queries
 
 
 def time_predicates(predicates: List[Predicate], k: int):

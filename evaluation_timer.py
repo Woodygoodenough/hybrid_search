@@ -10,8 +10,10 @@ timer = Timer()
 db = DbManagement()
 search = Search(timer, db)
 query = "machine learning"
-k_values = [5, 10, 50, 100, 500, 1000, 2500, 5000, 7000, 10000]
+k_values = [5, 10, 50, 100, 200, 500, 1000, 2500, 5000, 6000, 7000, 10000]
 single_queries = [
+    [Predicate(key="token_count", value=400, operator=">=")],  # ~300
+    [Predicate(key="token_count", value=350, operator=">=")],  # ~1000
     [Predicate(key="revdate", value="2025-02-19 19:08:15", operator=">=")],  # ~15k
     [Predicate(key="revdate", value="2025-02-19 12:33:47", operator=">=")],  # ~20k
     [Predicate(key="revdate", value="2025-02-19 08:51:23", operator=">=")],  # ~25k
@@ -38,6 +40,18 @@ single_queries = [
 ]
 
 dual_queries = [
+    [
+        Predicate(key="token_count", value=450, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 23:47:33", operator=">="),
+    ],  # ~100
+    [
+        Predicate(key="token_count", value=380, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 21:15:28", operator=">="),
+    ],  # ~500
+    [
+        Predicate(key="token_count", value=300, operator=">="),
+        Predicate(key="revdate", value="2025-02-19 18:42:17", operator=">="),
+    ],  # ~5000
     [
         Predicate(key="token_count", value=51, operator=">="),
         Predicate(key="revdate", value="2025-02-19 13:58:20", operator=">="),
@@ -161,14 +175,15 @@ dual_queries = [
 ]
 
 
-def time_predicates(predicates: List[Predicate], k: int):
+def time_predicates(
+    predicates: List[Predicate], k: int, methods: List[SearchMethod] = None
+):
     timed_method_results = []
-    for method in SearchMethod:
+    for method in methods or SearchMethod:
         with timer.method_context(method):
-            for _ in range(1):
+            for _ in range(30):
                 with timer.run():
                     results = search.search(query, predicates, k, method)
-            # Create TimedMethodResult after all runs for this method
             timed_method_results.append(
                 TimedMethodResult.from_raw_method_runs((timer.method, timer.runs))
             )
@@ -184,10 +199,9 @@ def time_predicates(predicates: List[Predicate], k: int):
 df_all = pd.DataFrame()
 for predicates in single_queries + dual_queries:
     for k in k_values:
+        print(f"{'='*80}")
+        print(f"Timing predicates: {predicates} with k={k}")
+        print(f"{'='*80}")
         timed_predicates_results = time_predicates(predicates, k)
         df_all = pd.concat([df_all, timed_predicates_results.to_df()])
 df_all.to_csv("timed_results.csv", index=False)
-
-# %%
-df_all
-# %%

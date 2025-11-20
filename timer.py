@@ -201,4 +201,6 @@ class TimedPredicatesResults:
             df = pd.concat([df, timed_method_result.to_ave_df()])
         df["k"] = self.k
         df["num_survivors"] = self.num_survivors
+        # get the literal string representation of the predicates
+        df["predicates"] = ", ".join([str(p) for p in self.predicates])
         return df

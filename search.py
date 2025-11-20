@@ -276,9 +276,14 @@ class Search:
         """
         # each cluster is expected to have predicate_count / NLIST survivors
         # the expected number of clusters to search is k / (predicate_count / NLIST)
-        expected_nprobe = k_remaining * NLIST // predicate_count + old_nprobe
-        # Use 3x multiplier for safety to ensure we get enough results
-        return max(1, min(3 * expected_nprobe, NLIST))
+        # we use a 1.5x multiplier to be safe
+        expected_nprobe = (
+            int(1.5 * k_remaining * NLIST // predicate_count)
+            # refer to the comment in _opt_pos_search_k_and_nprobe for the 3 multiplier
+            + 3 * old_nprobe
+        )
+
+        return max(1, min(expected_nprobe, NLIST))
 
     def _opt_pos_search_k_and_nprobe(
         self,
@@ -294,9 +299,9 @@ class Search:
         else:
             # possibility of any one entry to be a survivor is est_survivors / N
             # we expect to find k survivors, so we need to search for k * N / est_survivors entries
-            # we use a 3x multiplier to be safe
+            # we use a 1.5x multiplier to be safe
             expected_search_k = (
-                3 * k_remaining * N // max(est_survivors, 1)
+                int(1.5 * k_remaining * N / max(est_survivors, 1))
                 # note the 3 below is not "optimal", we should not add this multiple if we stick with statistical expectation
                 # however, let's consider an edge case. assume there is actually 0 survivors, and we only request 3 results,
                 # search_k will only grow linearly, which takes a lot of iterations to reach N before algo terminates
@@ -307,7 +312,7 @@ class Search:
             search_k = min(N, expected_search_k)
             # per cluster, we expect to have est_survivors / NLIST survivors
             # we expect to find search_k results, so we need to search for search_k * NLIST / est_survivors clusters
-            # note we already applied 3x multiplier to search_k, so for now nprobe should already be large enough
+            # note we already applied 1.5x multiplier to search_k, so for now nprobe should already be large enough
             expected_nprobe = search_k * NLIST // max(est_survivors, 1) + old_nprobe
             nprobe = min(NLIST, max(1, expected_nprobe))
         return search_k, nprobe
