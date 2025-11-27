@@ -266,6 +266,15 @@ class FaissIVFIndex:
         params = faiss.IVFPQSearchParameters(sel=id_selector, nprobe=nprobe)
         distances, indices = self.index.search(q, k, params=params)
         return AnnSearchResults(distances=distances.squeeze(), item_ids=indices.squeeze())
+    
+    def get_vectors_by_ids(self, item_ids: List[int]) -> np.ndarray:
+        if len(item_ids) == 0:
+            return np.zeros((0, self.cfg.dim), dtype=np.float32)
+    
+        vectors = np.zeros((len(item_ids), self.cfg.dim), dtype=np.float32)
+        for i, item_id in enumerate(item_ids):
+            vectors[i] = self.index.reconstruct(int(item_id))
+        return vectors
 
 
     def save(self, dirpath: str) -> None:

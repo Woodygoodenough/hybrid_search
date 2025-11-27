@@ -22,6 +22,8 @@ class SearchMethod(Enum):
     ADAP_PRE_SEARCH = 2
     BASE_POS_SEARCH = 3
     ADAP_POS_SEARCH = 4
+    BRUTE_FORCE = 5
+    
 
 
 class Section(Enum):

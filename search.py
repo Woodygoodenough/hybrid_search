@@ -72,6 +72,8 @@ class Search:
             return self.adap_pre_search(embedding_query, predicates, k)
         elif method == SearchMethod.ADAP_POS_SEARCH:
             return self.adap_pos_search(embedding_query, predicates, k, est_survivors)
+        elif method == SearchMethod.BRUTE_FORCE: 
+            return self.brute_force_search(embedding_query, predicates, k)
         else:
             raise ValueError(f"Invalid method: {method}")
 
@@ -267,23 +269,57 @@ class Search:
                     results=top_results[:k],
                     is_k=len(top_results) == k,
                 )
+    def brute_force_search(
+            self,
+            embedding_query: np.ndarray,
+            predicates: List[Predicate],
+            k: int,
+        ) -> HSearchResults:
+            with self.time_section(Section.TOTAL):
+                # Step 1: Get all items matching predicates
+                with self.time_section(Section.DB_SEARCH):
+                    db_records = self.db.predicates_search(predicates)
+            
+                if len(db_records) == 0:
+                    return HSearchResults(results=[], is_k=False)
+            
+                # Step 2 & 3: Get vectors and compute similarities
+                item_ids = [record.item_id for record in db_records.records]
+            
+                with self.time_section(Section.FAISS_SEARCH):
+                    ann_results = self.index.search(
+                        embedding_query,
+                        k=min(len(item_ids), k * 10),  
+                        nprobe=NLIST,  # Search ALL clusters
+                        item_ids=item_ids
+                    )
+            
+                # Step 4: Create results
+                with self.time_section(Section.INTERSECT):
+                    results = self._intersect(ann_results, db_records)
+            
+                with self.time_section(Section.FINALIZE):
+                    return HSearchResults(
+                        results=results[:k],
+                        is_k=len(results) >= k
+                )
 
     def _opt_pre_nprobe(
-        self, predicate_count: int, k_remaining: int, old_nprobe: int = 0
-    ) -> int:
-        """
-        Find the optimal nprobe for the query and predicates.
-        """
-        # each cluster is expected to have predicate_count / NLIST survivors
-        # the expected number of clusters to search is k / (predicate_count / NLIST)
-        # we use a 1.5x multiplier to be safe
-        expected_nprobe = (
-            int(1.5 * k_remaining * NLIST // predicate_count)
-            # refer to the comment in _opt_pos_search_k_and_nprobe for the 3 multiplier
-            + 3 * old_nprobe
-        )
+            self, predicate_count: int, k_remaining: int, old_nprobe: int = 0
+        ) -> int:
+            """
+            Find the optimal nprobe for the query and predicates.
+            """
+            # each cluster is expected to have predicate_count / NLIST survivors
+            # the expected number of clusters to search is k / (predicate_count / NLIST)
+            # we use a 1.5x multiplier to be safe
+            expected_nprobe = (
+                int(1.5 * k_remaining * NLIST // predicate_count)
+                # refer to the comment in _opt_pos_search_k_and_nprobe for the 3 multiplier
+                + 3 * old_nprobe
+            )
 
-        return max(1, min(expected_nprobe, NLIST))
+            return max(1, min(expected_nprobe, NLIST))
 
     def _opt_pos_search_k_and_nprobe(
         self,

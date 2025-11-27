@@ -8,8 +8,11 @@ N = 150_000
 REPO_ID = "DragonLLM/Clean-Wikipedia-English-Articles"
 CHUNK_FETCH = 50_000     # fetch this many, shuffle locally, then write
 LOG_EVERY = 2_000
-OUT_CSV = "wikipedia_sample_150k_with_ids.csv"
+OUT_CSV = "wikipedia_sample_150k.csv"
 COLUMNS_CSV = ["item_id","id","title","text","url","revdate","token_count","entity"]
+COLUMNS = ["id", "title", "text", "url", "revdate", "token_count", "entity"] 
+
+
 
 # for csv loading
 CHUNK_SIZE = 10_000

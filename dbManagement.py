@@ -189,7 +189,7 @@ if __name__ == "__main__":
     # for initializing the database
     db_management = DbManagement()
     db_management.create_db()
-    from settings import OUT_CSV, CHUNK_SIZE
+    from settings import CHUNK_SIZE
 
-    reader = pd.read_csv(OUT_CSV, usecols=USECOLS, chunksize=CHUNK_SIZE)
+    reader = pd.read_csv("wikipedia_sample_150k_with_ids.csv", usecols=USECOLS, chunksize=CHUNK_SIZE)
     db_management.load_db(reader)
