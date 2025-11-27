@@ -9,6 +9,8 @@ from shared_dataclasses import Predicate
 from histo2d import Histo2D
 import pandas as pd
 from timer import Timer, Section, SearchMethod
+import pickle
+import os
 
 
 @dataclass
@@ -36,7 +38,7 @@ class HSearchResults:
 
 
 class Search:
-    def __init__(self, timer: Timer = None, db: DbManagement = None):
+    def __init__(self, timer: Timer = None, db: DbManagement = None, lr_model_path: str = 'lr_model.pkl'):
         self.timer = timer or Timer()
         self.time_section = self.timer.section
         self.time_method = self.timer.method_context
@@ -44,6 +46,12 @@ class Search:
         self.embedder = Embedder()
         self.db = db or DbManagement()
         self.histo = Histo2D.from_records(self.db.predicates_search([]))
+
+        # Load LR model if it exists
+        self.lr_model_package = None
+        if os.path.exists(lr_model_path):
+            with open(lr_model_path, 'rb') as f:
+                self.lr_model_package = pickle.load(f)
 
     def __enter__(self):
         return self
@@ -267,6 +275,60 @@ class Search:
                     results=top_results[:k],
                     is_k=len(top_results) == k,
                 )
+
+    def lr_based_adap_search(
+        self,
+        embedding_query: np.ndarray,
+        predicates: List[Predicate],
+        k: int,
+    ) -> HSearchResults:
+        """
+        Logistic Regression-based adaptive search that automatically selects
+        between PRE and POS search methods based on the trained LR model.
+
+        Args:
+            embedding_query: Query embedding vector
+            predicates: List of predicates for filtering
+            k: Number of results to return
+
+        Returns:
+            HSearchResults object with search results
+        """
+        # Estimate survivors using histogram
+        est_survivors = self.histo.estimate_survivors(predicates)
+
+        # If no LR model is loaded, fall back to a simple heuristic
+        if self.lr_model_package is None:
+            # Simple fallback: use POS if est_survivors is small relative to k
+            if est_survivors < k * 100:
+                return self.adap_pos_search(embedding_query, predicates, k, est_survivors)
+            else:
+                return self.adap_pre_search(embedding_query, predicates, k)
+
+        # Prepare features for the LR model
+        total_docs = 150000
+        selectivity = est_survivors / total_docs
+
+        features_df = pd.DataFrame({
+            'k': [k],
+            'num_survivors': [est_survivors],
+            'selectivity': [selectivity]
+        })
+
+        # Scale features and predict
+        scaler = self.lr_model_package['scaler']
+        model = self.lr_model_package['model']
+
+        features_scaled = scaler.transform(features_df)
+        prediction = model.predict(features_scaled)[0]
+
+        # prediction == 1 means POS is faster, prediction == 0 means PRE is faster
+        if prediction == 1:
+            # Use POS search
+            return self.adap_pos_search(embedding_query, predicates, k, est_survivors)
+        else:
+            # Use PRE search
+            return self.adap_pre_search(embedding_query, predicates, k)
 
     def _opt_pre_nprobe(
         self, predicate_count: int, k_remaining: int, old_nprobe: int = 0
