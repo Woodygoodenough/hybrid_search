@@ -9,8 +9,58 @@ from shared_dataclasses import Predicate
 from histo2d import Histo2D
 import pandas as pd
 from timer import Timer, Section, SearchMethod
-import pickle
-import os
+
+
+# ============================================================================
+# HARDCODED LOGISTIC REGRESSION MODEL FOR PRE/POS SELECTION
+# Auto-generated from model_evaluation.py
+# This eliminates pkl loading overhead for faster inference
+# ============================================================================
+
+# Scaler parameters (StandardScaler) - will be populated by model_evaluation.py
+_SCALER_MEAN = np.array([2687.2571942446, 81211.6438848921, 0.5414109592])
+_SCALER_SCALE = np.array([3341.8898775446, 35212.3631437106, 0.2347490876])
+
+# Logistic Regression parameters - will be populated by model_evaluation.py
+_LR_COEF = np.array([-1.3276164995, 2.2549849548, 2.2549849548])
+_LR_INTERCEPT = 9.9547678062
+
+
+def _predict_pos_faster_hardcoded(k: int, num_survivors: int, total_docs: int = 150000) -> bool:
+    """
+    Predict whether POS search will be faster than PRE search using hardcoded model.
+    This is much faster than loading a pkl file.
+
+    Args:
+        k: Number of results requested
+        num_survivors: Estimated number of survivors after predicates
+        total_docs: Total number of documents (default: 150000)
+
+    Returns:
+        True if POS is predicted to be faster, False if PRE is predicted to be faster
+    """
+    # If model parameters are not set, use simple heuristic
+    if _LR_COEF is None or _LR_INTERCEPT is None:
+        # Simple fallback: use POS if selectivity is low
+        return num_survivors < k * 100
+
+    # Calculate selectivity
+    selectivity = num_survivors / total_docs
+
+    # Create feature vector
+    features = np.array([k, num_survivors, selectivity])
+
+    # Scale features
+    features_scaled = (features - _SCALER_MEAN) / _SCALER_SCALE
+
+    # Calculate logistic regression prediction
+    logit = np.dot(features_scaled, _LR_COEF) + _LR_INTERCEPT
+
+    # Apply sigmoid and get prediction
+    probability_pos = 1 / (1 + np.exp(-logit))
+
+    # Predict POS if probability > 0.5
+    return probability_pos > 0.5
 
 
 @dataclass
@@ -38,7 +88,7 @@ class HSearchResults:
 
 
 class Search:
-    def __init__(self, timer: Timer = None, db: DbManagement = None, lr_model_path: str = 'lr_model.pkl'):
+    def __init__(self, timer: Timer = None, db: DbManagement = None):
         self.timer = timer or Timer()
         self.time_section = self.timer.section
         self.time_method = self.timer.method_context
@@ -46,12 +96,6 @@ class Search:
         self.embedder = Embedder()
         self.db = db or DbManagement()
         self.histo = Histo2D.from_records(self.db.predicates_search([]))
-
-        # Load LR model if it exists
-        self.lr_model_package = None
-        if os.path.exists(lr_model_path):
-            with open(lr_model_path, 'rb') as f:
-                self.lr_model_package = pickle.load(f)
 
     def __enter__(self):
         return self
@@ -284,7 +328,10 @@ class Search:
     ) -> HSearchResults:
         """
         Logistic Regression-based adaptive search that automatically selects
-        between PRE and POS search methods based on the trained LR model.
+        between PRE and POS search methods based on the hardcoded LR model.
+
+        This uses hardcoded model parameters instead of loading a pkl file,
+        eliminating file I/O overhead for maximum inference speed.
 
         Args:
             embedding_query: Query embedding vector
@@ -297,37 +344,15 @@ class Search:
         # Estimate survivors using histogram
         est_survivors = self.histo.estimate_survivors(predicates)
 
-        # If no LR model is loaded, fall back to a simple heuristic
-        if self.lr_model_package is None:
-            # Simple fallback: use POS if est_survivors is small relative to k
-            if est_survivors < k * 100:
-                return self.adap_pos_search(embedding_query, predicates, k, est_survivors)
-            else:
-                return self.adap_pre_search(embedding_query, predicates, k)
+        # Use hardcoded model to predict (no file loading overhead!)
+        use_pos = _predict_pos_faster_hardcoded(k, est_survivors)
 
-        # Prepare features for the LR model
-        total_docs = 150000
-        selectivity = est_survivors / total_docs
-
-        features_df = pd.DataFrame({
-            'k': [k],
-            'num_survivors': [est_survivors],
-            'selectivity': [selectivity]
-        })
-
-        # Scale features and predict
-        scaler = self.lr_model_package['scaler']
-        model = self.lr_model_package['model']
-
-        features_scaled = scaler.transform(features_df)
-        prediction = model.predict(features_scaled)[0]
-
-        # prediction == 1 means POS is faster, prediction == 0 means PRE is faster
-        if prediction == 1:
-            # Use POS search
+        # Execute the predicted best method
+        if use_pos:
+            # POS is predicted to be faster
             return self.adap_pos_search(embedding_query, predicates, k, est_survivors)
         else:
-            # Use PRE search
+            # PRE is predicted to be faster
             return self.adap_pre_search(embedding_query, predicates, k)
 
     def _opt_pre_nprobe(

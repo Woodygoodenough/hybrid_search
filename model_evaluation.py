@@ -452,6 +452,180 @@ def plot_decision_tree(dt_model, feature_cols):
     plt.show()
 
 
+def inject_hardcoded_params_to_search_py(lr_model, scaler, feature_cols):
+    """
+    Directly inject hardcoded LR model parameters into search.py.
+    This eliminates the need to load pkl files during inference.
+    """
+    print("\n" + "=" * 80)
+    print("INJECTING HARDCODED LR MODEL PARAMETERS INTO search.py")
+    print("=" * 80)
+
+    # Extract model parameters
+    coefficients = lr_model.coef_[0]
+    intercept = lr_model.intercept_[0]
+
+    # Extract scaler parameters
+    mean = scaler.mean_
+    scale = scaler.scale_
+
+    print(f"\nModel Parameters:")
+    print(f"  Coefficients: {coefficients}")
+    print(f"  Intercept: {intercept:.6f}")
+    print(f"\nScaler Parameters:")
+    print(f"  Mean: {mean}")
+    print(f"  Scale: {scale}")
+
+    # Read search.py
+    with open('search.py', 'r') as f:
+        lines = f.readlines()
+
+    # Find and replace the parameter lines
+    new_lines = []
+    for line in lines:
+        if line.startswith('_SCALER_MEAN = None'):
+            new_lines.append(f'_SCALER_MEAN = np.array([{mean[0]:.10f}, {mean[1]:.10f}, {mean[2]:.10f}])\n')
+        elif line.startswith('_SCALER_SCALE = None'):
+            new_lines.append(f'_SCALER_SCALE = np.array([{scale[0]:.10f}, {scale[1]:.10f}, {scale[2]:.10f}])\n')
+        elif line.startswith('_LR_COEF = None'):
+            new_lines.append(f'_LR_COEF = np.array([{coefficients[0]:.10f}, {coefficients[1]:.10f}, {coefficients[2]:.10f}])\n')
+        elif line.startswith('_LR_INTERCEPT = None'):
+            new_lines.append(f'_LR_INTERCEPT = {intercept:.10f}\n')
+        else:
+            new_lines.append(line)
+
+    # Write back to search.py
+    with open('search.py', 'w') as f:
+        f.writelines(new_lines)
+
+    print(f"\n✅ Hardcoded parameters injected into search.py")
+    print(f"   - Updated _SCALER_MEAN")
+    print(f"   - Updated _SCALER_SCALE")
+    print(f"   - Updated _LR_COEF")
+    print(f"   - Updated _LR_INTERCEPT")
+
+    # Also generate standalone file for reference
+    code = f'''"""
+Hardcoded Logistic Regression Model for PRE vs POS Selection
+Auto-generated from model_evaluation.py
+"""
+import numpy as np
+
+# Model trained on features: {feature_cols}
+# Feature order: k, num_survivors, selectivity
+
+# Scaler parameters (StandardScaler)
+SCALER_MEAN = np.array([{mean[0]:.10f}, {mean[1]:.10f}, {mean[2]:.10f}])
+SCALER_SCALE = np.array([{scale[0]:.10f}, {scale[1]:.10f}, {scale[2]:.10f}])
+
+# Logistic Regression parameters
+LR_COEF = np.array([{coefficients[0]:.10f}, {coefficients[1]:.10f}, {coefficients[2]:.10f}])
+LR_INTERCEPT = {intercept:.10f}
+
+
+def predict_pos_faster(k: int, num_survivors: int, total_docs: int = 150000) -> bool:
+    """
+    Predict whether POS search will be faster than PRE search.
+
+    Args:
+        k: Number of results requested
+        num_survivors: Estimated number of survivors after predicates
+        total_docs: Total number of documents (default: 150000)
+
+    Returns:
+        True if POS is predicted to be faster, False if PRE is predicted to be faster
+    """
+    # Calculate selectivity
+    selectivity = num_survivors / total_docs
+
+    # Create feature vector
+    features = np.array([k, num_survivors, selectivity])
+
+    # Scale features
+    features_scaled = (features - SCALER_MEAN) / SCALER_SCALE
+
+    # Calculate logistic regression prediction
+    logit = np.dot(features_scaled, LR_COEF) + LR_INTERCEPT
+
+    # Apply sigmoid and get prediction
+    probability_pos = 1 / (1 + np.exp(-logit))
+
+    # Predict POS if probability > 0.5
+    return probability_pos > 0.5
+
+
+def get_prediction_probability(k: int, num_survivors: int, total_docs: int = 150000) -> tuple:
+    """
+    Get the probability of POS being faster.
+
+    Args:
+        k: Number of results requested
+        num_survivors: Estimated number of survivors after predicates
+        total_docs: Total number of documents (default: 150000)
+
+    Returns:
+        Tuple of (prediction, prob_pre, prob_pos)
+    """
+    # Calculate selectivity
+    selectivity = num_survivors / total_docs
+
+    # Create feature vector
+    features = np.array([k, num_survivors, selectivity])
+
+    # Scale features
+    features_scaled = (features - SCALER_MEAN) / SCALER_SCALE
+
+    # Calculate logistic regression prediction
+    logit = np.dot(features_scaled, LR_COEF) + LR_INTERCEPT
+
+    # Apply sigmoid
+    probability_pos = 1 / (1 + np.exp(-logit))
+    probability_pre = 1 - probability_pos
+
+    prediction = "POS" if probability_pos > 0.5 else "PRE"
+
+    return prediction, probability_pre, probability_pos
+'''
+
+    # Save to file
+    with open('lr_model_hardcoded.py', 'w') as f:
+        f.write(code)
+
+    print(f"✅ Hardcoded model saved to: lr_model_hardcoded.py")
+    print(f"\nModel Parameters:")
+    print(f"  Coefficients: {coefficients}")
+    print(f"  Intercept: {intercept:.6f}")
+    print(f"\nScaler Parameters:")
+    print(f"  Mean: {mean}")
+    print(f"  Scale: {scale}")
+
+    # Test the generated code
+    print("\n" + "=" * 80)
+    print("TESTING HARDCODED MODEL")
+    print("=" * 80)
+
+    # Import and test
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("lr_model_hardcoded", "lr_model_hardcoded.py")
+    hardcoded_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hardcoded_module)
+
+    # Test cases
+    test_cases = [
+        (100, 50000),
+        (10, 5000),
+        (1000, 100000),
+        (5, 1000),
+    ]
+
+    print("\nTest predictions:")
+    for k, num_survivors in test_cases:
+        pred, prob_pre, prob_pos = hardcoded_module.get_prediction_probability(k, num_survivors)
+        print(f"  k={k:4d}, survivors={num_survivors:6d} -> {pred} (PRE: {prob_pre:.3f}, POS: {prob_pos:.3f})")
+
+    return code
+
+
 def main():
     """Main execution function"""
     # Load and prepare data
@@ -481,7 +655,18 @@ def main():
     plot_confusion_matrices(models, y_test)
     plot_decision_tree(model4, feature_cols)
 
+    # Inject hardcoded LR model parameters into search.py (best model)
+    lr_model = model3['model']['lr']
+    scaler = model3['model']['scaler']
+    inject_hardcoded_params_to_search_py(lr_model, scaler, feature_cols)
+
     print("\n✅ Model evaluation complete!")
+    print("\n" + "=" * 80)
+    print("NEXT STEPS:")
+    print("=" * 80)
+    print("The LR model parameters have been hardcoded into search.py")
+    print("You can now use search.lr_based_adap_search() with zero pkl loading overhead!")
+    print("=" * 80)
 
 
 if __name__ == "__main__":
