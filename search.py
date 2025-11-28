@@ -17,11 +17,11 @@ from timer import Timer, Section, SearchMethod
 # This eliminates pkl loading overhead for faster inference
 # ============================================================================
 
-# Scaler parameters (StandardScaler) - will be populated by model_evaluation.py
+# Scaler parameters (StandardScaler) -populated by model_evaluation.py
 _SCALER_MEAN = np.array([2687.2571942446, 81211.6438848921, 0.5414109592])
 _SCALER_SCALE = np.array([3341.8898775446, 35212.3631437106, 0.2347490876])
 
-# Logistic Regression parameters - will be populated by model_evaluation.py
+# Logistic Regression parameters -populated by model_evaluation.py
 _LR_COEF = np.array([-1.3276164995, 2.2549849548, 2.2549849548])
 _LR_INTERCEPT = 9.9547678062
 
