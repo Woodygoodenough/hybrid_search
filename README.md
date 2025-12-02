@@ -226,7 +226,7 @@ predicates = [
     Predicate(key="token_count", value=400, operator=">="),
 ]
 
-# 🆕 LR-based adaptive search - automatically chooses PRE or POS!
+# LR-based adaptive search - automatically chooses PRE or POS!
 results = search.lr_based_adap_search(query_embedding, predicates, k=10)
 
 print(f"Found {len(results.results)} results")
@@ -422,10 +422,4 @@ This project implements ML-optimized adaptive hybrid search strategies.
 4. Zero-overhead inference with hardcoded parameters
 5. Performance benchmarking and timing utilities
 6. 2D histogram-based selectivity estimation
-
- **Future Enhancements:**
-1. Explore more sophisticated ML models (Neural Networks, Gradient Boosting)
-2. Online learning for real-time model adaptation
-3. Multi-objective optimization (latency + accuracy)
-4. Query pattern analysis and caching strategies
 
