@@ -156,9 +156,9 @@ python create_faiss_from_csv.py wikipedia_sample_150k_with_ids.csv [train_sample
 - `pq_m`: Product quantization sub-vectors (default: 32)
 - `pq_bits`: Bits per sub-vector (default: 8)
 
-## 🔍 Current Implementation Status
+## Implementation Details
 
-### ✅ Implemented Features
+### Features
 
 **Search Strategies:**
 - **BASE_PRE_SEARCH**: Baseline pre-search filtering (filters DB first, then searches vectors with fixed nprobe)
